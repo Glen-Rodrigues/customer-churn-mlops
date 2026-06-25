@@ -16,3 +16,5 @@ evidently
 pytest
 joblib
 python-dotenv
+pyyaml
+dvc

@@ -1,0 +1,16 @@
+# Paths - keep all file locations here so scripts never hardcode strings
+data:
+  raw_path: "data/raw/Telco-Customer-Churn.csv"
+  processed_path: "data/processed/cleaned_data.csv"
+  target_column: "Churn"
+
+# Reproducibility - using a fixed seed means anyone re-running this
+# (including you, 3 weeks from now) gets the same train/test split
+split:
+  test_size: 0.2
+  random_state: 42
+
+# Where artifacts get saved (we'll use this from Phase 5 onward)
+artifacts:
+  model_dir: "models/"
+  preprocessor_path: "artifacts/preprocessor.joblib"
