@@ -155,3 +155,44 @@ def save_processed_data(X_train, X_test, y_train, y_test, target_column, output_
     test_df.to_csv(test_path, index=False)
 
     return train_path, test_path
+
+
+def main():
+    """
+    Run the full preprocessing pipeline end-to-end:
+    load config -> load raw data -> clean -> encode -> split -> save.
+
+    This lets the whole pipeline run with a single command:
+        python src/data_preprocessing.py
+    instead of manually calling each function one by one.
+    """
+    config = load_config()
+
+    df = load_raw_data(config['data']['raw_path'])
+    df = clean_total_charges(df)
+    df = drop_identifier_column(df)
+    df = encode_binary_columns(df, config['features']['binary_cols'])
+    df = encode_ordinal_columns(df, config['features']['ordinal_mappings'])
+    df = encode_nominal_columns(df, config['features']['nominal_cols'])
+    df = encode_target_column(df, config['data']['target_column'])
+
+    X_train, X_test, y_train, y_test = split_features_target(
+        df,
+        config['data']['target_column'],
+        config['split']['test_size'],
+        config['split']['random_state']
+    )
+
+    train_path, test_path = save_processed_data(
+        X_train, X_test, y_train, y_test,
+        config['data']['target_column'],
+        config['data']['processed_dir']
+    )
+
+    print(f"Preprocessing complete.")
+    print(f"Train data saved to: {train_path} ({X_train.shape[0]} rows)")
+    print(f"Test data saved to: {test_path} ({X_test.shape[0]} rows)")
+
+
+if __name__ == "__main__":
+    main()
