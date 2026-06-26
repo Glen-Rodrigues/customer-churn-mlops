@@ -12,6 +12,7 @@ cleaning/encoding logic to new, single customer records later.
 
 import pandas as pd
 import yaml
+from sklearn.model_selection import train_test_split
 
 
 def load_config(config_path="configs/config.yaml"):
@@ -90,3 +91,67 @@ def encode_nominal_columns(df, nominal_cols):
     df = df.copy()
     df = pd.get_dummies(df, columns=nominal_cols, drop_first=True)
     return df
+
+
+def encode_target_column(df, target_column):
+    """
+    Map the target column (Churn) from Yes/No strings to 1/0.
+    Kept separate from encode_binary_columns since the target plays a
+    fundamentally different role in modeling than input features -
+    it's the answer, not a predictor.
+    """
+    df = df.copy()
+    df[target_column] = df[target_column].map({'Yes': 1, 'No': 0})
+    return df
+
+
+def split_features_target(df, target_column, test_size, random_state):
+    """
+    Separate the dataframe into X (features) and y (target), then split
+    each into train and test sets.
+
+    X = everything the model is allowed to see when making a prediction.
+    y = the actual answer (Churn) the model is trying to learn to predict.
+
+    test_size and random_state come from config.yaml so the split is
+    reproducible - the same random_state always produces the same split,
+    which matters for fair comparison between different model runs later.
+    """
+    X = df.drop(columns=[target_column])
+    y = df[target_column]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state
+    )
+
+    return X_train, X_test, y_train, y_test
+
+
+def save_processed_data(X_train, X_test, y_train, y_test, target_column, output_dir):
+    """
+    Save the train/test split to disk as two CSV files: train.csv and test.csv.
+
+    Each file recombines the features (X) with the target (y) into one
+    dataframe before saving - this mirrors how the raw data was originally
+    shaped, and means train.py only needs to load two files and can split
+    X/y again itself using the same target_column name from config.
+
+    output_dir is the folder to save into (created if it doesn't exist).
+    """
+    import os
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Recombine features and target back into one dataframe per split
+    train_df = X_train.copy()
+    train_df[target_column] = y_train
+
+    test_df = X_test.copy()
+    test_df[target_column] = y_test
+
+    train_path = os.path.join(output_dir, "train.csv")
+    test_path = os.path.join(output_dir, "test.csv")
+
+    train_df.to_csv(train_path, index=False)
+    test_df.to_csv(test_path, index=False)
+
+    return train_path, test_path
