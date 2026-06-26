@@ -14,3 +14,31 @@ split:
 artifacts:
   model_dir: "models/"
   preprocessor_path: "artifacts/preprocessor.joblib"
+
+# Feature classification for encoding (Phase 2)
+# These lists drive the encoding functions in data_preprocessing.py -
+# the functions themselves don't hardcode any column names.
+features:
+  binary_cols:
+    - "gender"
+    - "Partner"
+    - "Dependents"
+    - "PhoneService"
+    - "PaperlessBilling"
+
+  nominal_cols:
+    - "MultipleLines"
+    - "InternetService"
+    - "OnlineSecurity"
+    - "OnlineBackup"
+    - "DeviceProtection"
+    - "TechSupport"
+    - "StreamingTV"
+    - "StreamingMovies"
+    - "PaymentMethod"
+
+  ordinal_mappings:
+    Contract:
+      "Month-to-month": 0
+      "One year": 1
+      "Two year": 2
