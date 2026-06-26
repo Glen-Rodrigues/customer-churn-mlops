@@ -37,6 +37,7 @@ models/*.onnx
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+!data/processed/*.dvc
 
 # =========================
 # Artifacts
