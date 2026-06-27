@@ -78,3 +78,8 @@ dist/
 # =========================
 .DS_Store
 Thumbs.db
+
+# =========================
+# Local-only notes (not part of the codebase)
+# =========================
+project_status.md
