@@ -16,9 +16,10 @@ testable functions chained together by a single entry point.
 """
 
 import pandas as pd
-import yaml
 import os
 from data_preprocessing import load_config
+from sklearn.linear_model import LogisticRegression
+
 
 def load_processed_data(processed_dir, target_column):
     """
@@ -38,3 +39,28 @@ def load_processed_data(processed_dir, target_column):
 
     return X_train, X_test, y_train, y_test
 
+
+def train_logistic_regression(X_train, y_train, **kwargs):
+    """
+    Train a Logistic Regression model on the training data.
+
+    Hyperparameters (e.g. max_iter, random_state, class_weight) are passed
+    in via **kwargs rather than hardcoded, so different configurations can
+    be tried from the call site (or later, MLflow experiment configs)
+    without editing this function.
+    """
+    model = LogisticRegression(**kwargs)
+    model.fit(X_train, y_train)
+    
+    return model
+
+
+if __name__ == "__main__":
+    config = load_config()
+    X_train, X_test, y_train, y_test = load_processed_data(
+        config['data']['processed_dir'],
+        config['data']['target_column']
+    )
+    
+    model = train_logistic_regression(X_train, y_train, max_iter=1000, random_state=42)
+    print("Model trained successfully:", model)
