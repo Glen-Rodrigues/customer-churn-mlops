@@ -52,6 +52,7 @@ artifacts/*
 # MLflow
 # =========================
 mlruns/
+mlflow.db
 
 # =========================
 # Testing
