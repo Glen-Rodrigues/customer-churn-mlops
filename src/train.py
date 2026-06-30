@@ -19,6 +19,10 @@ import pandas as pd
 import os
 from data_preprocessing import load_config
 from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+import mlflow
+import mlflow.sklearn
 
 
 def load_processed_data(processed_dir, target_column):
@@ -55,12 +59,82 @@ def train_logistic_regression(X_train, y_train, **kwargs):
     return model
 
 
-if __name__ == "__main__":
+def scale_features(X_train, X_test):
+    """
+    Scale numeric features using StandardScaler (mean=0, std=1).
+
+    The scaler is fit only on X_train, then used to transform both
+    X_train and X_test - fitting on test data (or on combined data)
+    would leak test set statistics into training, inflating performance
+    estimates. The fitted scaler is returned so the exact same
+    transformation can be reused later (e.g. in predict.py on new,
+    unseen customer records).
+    """
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    
+    return X_train_scaled, X_test_scaled, scaler
+
+
+def evaluate_model(model, X_test, y_test):
+    """
+    Evaluate a trained model on the test set.
+
+    Computes accuracy, precision, recall, F1, and ROC-AUC. Accuracy alone
+    is misleading here given the ~73/27 class imbalance found in EDA (a
+    model predicting "No churn" for everyone would score ~73.5% accuracy
+    while being useless) - the other metrics, especially recall, matter
+    more since missing an actual churner is typically costlier than a
+    false alarm.
+    """
+    y_pred = model.predict(X_test)
+    y_prob = model.predict_proba(X_test)[:, 1]
+    metrics = {
+        "accuracy": accuracy_score(y_test, y_pred),
+        "precision": precision_score(y_test, y_pred),
+        "recall": recall_score(y_test, y_pred),
+        "f1": f1_score(y_test, y_pred),
+        "roc_auc": roc_auc_score(y_test, y_prob),
+    }
+    return metrics
+
+
+def main():
+    """
+    Orchestrate the full training pipeline for one model run and track it
+    with MLflow.
+
+    This is the only function in this file that knows MLflow exists - it
+    loads config and data, calls the pure ML functions (train, scale,
+    evaluate) to get back a model and metrics, then logs the run's
+    params, metrics, and the model artifact to MLflow. Keeping all
+    mlflow.* calls confined to main() is what keeps the functions above
+    MLflow-agnostic, testable, and reusable elsewhere.
+    """
     config = load_config()
+
     X_train, X_test, y_train, y_test = load_processed_data(
         config['data']['processed_dir'],
         config['data']['target_column']
     )
-    
-    model = train_logistic_regression(X_train, y_train, max_iter=1000, random_state=42)
-    print("Model trained successfully:", model)
+
+    X_train_scaled, X_test_scaled, scaler = scale_features(X_train, X_test)
+
+    params = {"max_iter": 1000, "random_state": 42}
+
+    mlflow.set_experiment("churn_prediction")
+    with mlflow.start_run():
+        model = train_logistic_regression(X_train_scaled, y_train, **params)
+
+        metrics = evaluate_model(model, X_test_scaled, y_test)
+
+        mlflow.log_params(params)
+        mlflow.log_metrics(metrics)
+        mlflow.sklearn.log_model(model, "model")
+
+        print(metrics)
+
+
+if __name__ == "__main__":
+    main()
