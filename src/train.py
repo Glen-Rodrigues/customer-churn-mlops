@@ -7,12 +7,16 @@ experiments with MLflow.
 Design principle: all ML logic here (loading data, fitting models,
 computing metrics) is kept MLflow-agnostic - these functions don't know
 or care that MLflow exists, so they're easy to test and reuse elsewhere
-(e.g. in predict.py or a notebook). The MLflow logging calls live only
-in main(), which acts as the orchestrator: it calls the pure functions,
-gets results back, and logs whatever it wants to MLflow.
+(e.g. in predict.py or a notebook). MLflow logging is confined to
+run_experiment(), which trains/evaluates/logs a single run for a given
+set of hyperparameters. main() is the top-level orchestrator: it loads
+and scales the data once, then calls run_experiment() once per
+hyperparameter configuration being compared (e.g. baseline vs
+class_weight='balanced'), so multiple experiments can be run and
+compared in MLflow without duplicating the run-train-log sequence.
 
 This mirrors the structure of data_preprocessing.py - small, focused,
-testable functions chained together by a single entry point.
+testable functions chained together by orchestrator function(s).
 """
 
 import pandas as pd
@@ -100,30 +104,16 @@ def evaluate_model(model, X_test, y_test):
     return metrics
 
 
-def main():
+def run_experiment(params, X_train_scaled, y_train, X_test_scaled, y_test):
     """
-    Orchestrate the full training pipeline for one model run and track it
-    with MLflow.
+    Run one full MLflow-tracked training experiment: train a Logistic
+    Regression model with the given hyperparameters, evaluate it on the
+    test set, and log params/metrics/model as a single MLflow run.
 
-    This is the only function in this file that knows MLflow exists - it
-    loads config and data, calls the pure ML functions (train, scale,
-    evaluate) to get back a model and metrics, then logs the run's
-    params, metrics, and the model artifact to MLflow. Keeping all
-    mlflow.* calls confined to main() is what keeps the functions above
-    MLflow-agnostic, testable, and reusable elsewhere.
+    Pulled out as its own function so main() can call it multiple times
+    with different param dicts (e.g. baseline vs class_weight='balanced')
+    without duplicating the training/logging logic for each comparison.
     """
-    config = load_config()
-
-    X_train, X_test, y_train, y_test = load_processed_data(
-        config['data']['processed_dir'],
-        config['data']['target_column']
-    )
-
-    X_train_scaled, X_test_scaled, scaler = scale_features(X_train, X_test)
-
-    params = {"max_iter": 1000, "random_state": 42}
-
-    mlflow.set_experiment("churn_prediction")
     with mlflow.start_run():
         model = train_logistic_regression(X_train_scaled, y_train, **params)
 
@@ -133,7 +123,37 @@ def main():
         mlflow.log_metrics(metrics)
         mlflow.sklearn.log_model(model, "model")
 
-        print(metrics)
+        print("\nParameters:", params)
+        print("Metrics:", metrics)
+
+
+def main():
+    """
+    Orchestrate the full training pipeline and track experiments with
+    MLflow.
+
+    Loads and scales the data once, then runs two comparable experiments
+    via run_experiment(): a baseline Logistic Regression, and one with
+    class_weight='balanced' to address the baseline's low recall (only
+    ~60% of actual churners caught) found during evaluation. Both runs
+    land in the same MLflow experiment for side-by-side comparison.
+    """
+    config = load_config()
+
+    X_train, X_test, y_train, y_test = load_processed_data(
+        config['data']['processed_dir'],
+        config['data']['target_column']
+    )
+
+    X_train_scaled, X_test_scaled, scaler = scale_features(X_train, X_test)
+    
+    baseline_params = {"max_iter": 1000, "random_state": 42}
+
+    balanced_params = {"max_iter": 1000, "random_state": 42, "class_weight": "balanced"}
+
+    mlflow.set_experiment("churn_prediction")
+    run_experiment(baseline_params, X_train_scaled, y_train, X_test_scaled, y_test)
+    run_experiment(balanced_params, X_train_scaled, y_train, X_test_scaled, y_test)
 
 
 if __name__ == "__main__":
