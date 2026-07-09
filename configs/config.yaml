@@ -42,3 +42,11 @@ features:
       "Month-to-month": 0
       "One year": 1
       "Two year": 2
+
+# MLflow experiment tracking: tracking_uri is where run metadata (params/metrics)
+# is stored, experiment_name groups all training runs together, and champion_run_id
+# is the specific run evaluate.py loads the selected best model from.
+mlflow:
+  tracking_uri: "sqlite:///mlflow.db"
+  experiment_name: "churn_prediction"
+  champion_run_id: "f7146820b045405583b8c69498d113ec"
