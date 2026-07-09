@@ -214,7 +214,21 @@ Optional fix later: `StandardScaler.set_output(transform="pandas")`.
   fix the src/ import path issue, actual tests in 
   tests/test_preprocessing.py
 - Phase 6: FastAPI + Docker (api/app.py currently an empty placeholder)
-- Phase 7: Evidently monitoring, optional Streamlit dashboard
+- Phase 7: Evidently monitoring, optional Streamlit dashboard. If automated
+  retraining + auto-selection of the champion (by e.g. highest ROC-AUC) is
+  introduced here, note that `load_champion_model()` in evaluate.py
+  currently hardcodes `mlflow.lightgbm.load_model()`, which only works
+  because the champion is manually fixed to a known LightGBM run
+  (config-driven `champion_run_id`). An auto-picked champion could be any
+  of the 3 model families (confirmed: a pure max-ROC-AUC rule would
+  actually pick Logistic Regression here, not LightGBM - see Phase 3/4
+  notes) - LightGBM's loader can't load an XGBoost or sklearn artifact, so
+  the loader would need to either (a) switch to the generic
+  `mlflow.pyfunc.load_model()` (works for any flavor, but loses native
+  model access - e.g. feature_importances_ - needed for SHAP), or
+  (b) dynamically dispatch to the correct flavor-specific loader based on
+  the run's logged metadata, mirroring the train_fn/log_fn dependency
+  injection pattern already used in run_experiment().
 - Phase 8: README/report polish
 
 ## Key learnings & principles (running list)
