@@ -219,6 +219,9 @@ def main():
     """
     config = load_config()
 
+    # Point at SQLite backend from config, so train.py and evaluate.py always agree on run storage
+    mlflow.set_tracking_uri(config['mlflow']['tracking_uri'])
+
     X_train, X_test, y_train, y_test = load_processed_data(
         config['data']['processed_dir'],
         config['data']['target_column']
