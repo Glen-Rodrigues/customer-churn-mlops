@@ -188,6 +188,18 @@ Plan: switch to sklearn.preprocessing.OneHotEncoder, fit once on training
 data, save fitted encoder via joblib to config's artifacts.preprocessor_path, 
 reuse the same fitted encoder in train.py and predict.py.
 
+**[Phase 5]** `scale_features()` in train.py fits a StandardScaler on
+X_train and returns it (per its own docstring, "for reuse in predict.py"),
+but train.py's main() never actually saves that fitted scaler anywhere.
+Harmless today - evaluate.py re-fits an identical scaler on the same
+X_train, which is mathematically safe since StandardScaler has no
+randomness and the data doesn't change. NOT safe for predict.py: a single
+new customer record has no "training data" to fit a fresh scaler on, so
+the exact fitted scaler must be persisted and reloaded, not recomputed.
+Plan: save via joblib to a config path (same pattern as the OneHotEncoder
+TODO above - possibly the same artifacts.preprocessor_path, or a
+dedicated scaler_path), fit once in train.py, reuse in predict.py.
+
 **[Phase 5]** `from data_preprocessing import load_config` (used in both
 train.py and data_preprocessing.py) works when running scripts directly
 via `python src/train.py`, but will NOT work automatically the same way
