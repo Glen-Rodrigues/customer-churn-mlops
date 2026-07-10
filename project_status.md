@@ -97,9 +97,9 @@ programmatically (see Phase 4 notes).
 Runner-up: LR-balanced (highest raw recall, 0.823) - documented as a
 close alternative if recall alone were the only priority.
 
-## Phase 4 — Deep Evaluation (src/evaluate.py) — IN PROGRESS
+## Phase 4 — Deep Evaluation (src/evaluate.py) — COMPLETE
 
-### MLflow tracking store cleanup (prerequisite work, now resolved)
+### MLflow tracking store cleanup (prerequisite work, resolved)
 - **Root cause found:** `train.py` originally never called
   `mlflow.set_tracking_uri(...)`, so runs silently used MLflow's raw
   file-store default (`mlruns/`). A newer MLflow version refuses to
@@ -116,65 +116,97 @@ close alternative if recall alone were the only priority.
   `train.py`'s `main()` now explicitly calls
   `mlflow.set_tracking_uri(config['mlflow']['tracking_uri'])` right
   after loading config, before `mlflow.set_experiment(...)`. `train.py`
-  was re-run once cleanly, producing exactly 8 runs (verified via a
-  direct SQLite row-count query).
-- **Important clarification (not a bug):** `tracking_uri` only
-  controls where run *metadata* (params/metrics/tags) lives. Model
-  *artifacts* (the actual serialized model files) still default to a
-  local `mlruns/` folder regardless of the tracking backend — the two
-  are separate storage concerns and both are needed together. Seeing
-  both `mlflow.db` and `mlruns/` populated after a clean run is
-  correct, not a sign of duplication.
+  was re-run once cleanly, producing exactly 8 runs.
+- **Clarification (not a bug):** `tracking_uri` only controls where run
+  *metadata* (params/metrics/tags) lives. Model *artifacts* still
+  default to a local `mlruns/` folder regardless of tracking backend —
+  seeing both populated after a clean run is correct, not duplication.
 - `config.yaml` now has an `mlflow:` section (`tracking_uri:
   "sqlite:///mlflow.db"`, `experiment_name: "churn_prediction"`,
-  `champion_run_id`) so no MLflow settings are hardcoded in `train.py`
-  or `evaluate.py`.
+  `champion_run_id`) so no MLflow settings are hardcoded.
 
-### Champion model identification (post-cleanup)
-- New clean champion run: `run_id: f7146820b045405583b8c69498d113ec`,
-  run name `polite-moth-290`. (Old run_id
-  `43256d3aa45d4c529c132a465cfd1858` from the pre-cleanup duplicated
-  store is now stale/invalid — do not reuse.)
-- Identified by sorting all 8 runs by ROC-AUC and confirming this run's
-  exact metric values match the documented LightGBM Tuned row
-  (roc_auc 0.8572036705414721) — notably 3rd highest ROC-AUC out of 8,
-  not 1st, consistent with the multi-metric selection reasoning above
-  rather than a simple max-ROC-AUC rule.
+### Champion model identification
+- Clean champion run: `run_id: f7146820b045405583b8c69498d113ec`, run
+  name `polite-moth-290`. (Old run_id `43256d3aa45d4c529c132a465cfd1858`
+  from the pre-cleanup duplicated store is stale/invalid.)
+- Confirmed by matching this run's metrics exactly to the documented
+  LightGBM Tuned row (roc_auc 0.8572036705414721) — 3rd highest ROC-AUC
+  out of 8, not 1st, consistent with the multi-metric selection
+  reasoning (see Phase 3), not a max-ROC-AUC rule.
 
-### evaluate.py — built and verified so far
-- `load_champion_model(config)` — loads the champion model directly
-  from its MLflow run via `mlflow.lightgbm.load_model()` (using
-  `runs:/{run_id}/model`) rather than retraining, so evaluation always
-  reflects the exact artifact that was actually selected as champion,
-  not a fresh retrained copy that could drift slightly.
-- `sanity_check_champion(model, X_test_scaled, y_test)` — re-runs the
-  existing `evaluate_model()` (from train.py) on the loaded model and
-  prints the result, to confirm the right run was loaded before
-  building anything on top of it.
-- **Verified: printed metrics from evaluate.py exactly match the
-  LightGBM Tuned row** (accuracy 0.7643718949609652, recall
-  0.8176943699731903, roc_auc 0.8572036705414721, etc.) — champion
-  model loading confirmed correct.
-- `get_confusion_matrix(model, X_test_scaled, y_test)` and
-  `plot_confusion_matrix(cm, save_path)` — written, added to `main()`,
-  saves a labeled heatmap PNG to `artifacts/confusion_matrix.png`.
-  **Not yet run/verified by Glen — next immediate step.**
+### evaluate.py — built, run, and verified end-to-end against real data
+All functions verified with actual output, restructured into a `main()`
+orchestrator matching train.py's pattern (functions do the work, main()
+chains them, `if __name__ == "__main__": main()`).
+
+- `load_champion_model(config)` — loads via `mlflow.lightgbm.load_model()`
+  (`runs:/{run_id}/model`). **Verified:** printed model params exactly
+  match config (`n_estimators=300, max_depth=4, learning_rate=0.05,
+  scale_pos_weight≈2.766`).
+- `sanity_check_champion(model, X_test_scaled, y_test)` — reruns
+  train.py's `evaluate_model()`. **Verified:** metrics exactly match
+  Phase 3's LightGBM Tuned row (accuracy 0.7644, precision 0.5360,
+  recall 0.8177, f1 0.6476, roc_auc 0.8572).
+- `get_confusion_matrix()` / `plot_confusion_matrix()` — saved to
+  `artifacts/confusion_matrix.png`. **Verified result:**
+  `[[772 FP:264], [FN:68 TP:305]]`. Cross-checked: recall
+  (305/373=0.8177) and precision (305/569=0.536) both match sanity
+  check exactly.
+- `plot_roc_curve()` — saved to `artifacts/roc_curve.png`, AUC computed
+  directly from the curve via `auc(fpr, tpr)` so the plotted line and
+  printed value are guaranteed consistent. Uses `predict_proba`, not
+  `predict`, since the point is pre-threshold performance.
+- `compute_shap_values()` / `plot_shap_summary()` — `shap.TreeExplainer`
+  (exact + fast for tree models, vs. slower/approximate general
+  `Explainer`). **Fix applied:** newer SHAP versions return a list of
+  two arrays (`[class_0, class_1]`) for binary classifiers instead of
+  one array; added `isinstance(shap_values, list)` check to select
+  index `[1]` (Churn class), matching `encode_target_column()`'s
+  Yes→1 mapping. Saved to `artifacts/shap_summary.png`.
+  **Verified against Phase 1 EDA:** top SHAP features (Contract,
+  tenure, MonthlyCharges, InternetService_Fiber optic,
+  OnlineSecurity_Yes, TechSupport_Yes) and their directionality all
+  match EDA's independently-found churn predictors and directions —
+  the model learned the same signal the manual EDA surfaced. Weak-
+  predictor features from EDA (gender, Partner, Dependents,
+  PhoneService) also show near-zero SHAP spread, consistent with EDA.
+- `analyze_false_negatives()` — compares the 68 missed churners (FN)
+  against the 305 correctly-caught churners (TP) on unscaled `X_test`
+  (real units, not standardized scores). **Finding:** missed churners
+  look "safe" by the model's own logic — ~2.3x higher TotalCharges
+  (2662 vs 1145), ~2.5x longer tenure (32.5 vs 12.9 months), far more
+  likely to be on longer contracts (avg Contract 0.559 vs 0.016) and to
+  already have OnlineSecurity/TechSupport. This is a genuine model
+  blind spot, not a bug: the dataset has no signal for why an otherwise
+  "safe-profile" customer churns (price sensitivity, competitor offers,
+  support experience aren't captured in this data).
+- `compare_feature_importance()` — cross-checks SHAP's mean |impact|
+  ranking against LightGBM's built-in `feature_importances_` (split-
+  count based). **Finding:** top 3 features (Contract, tenure,
+  MonthlyCharges/TotalCharges) agree between both methods, but ranking
+  *order* differs — LightGBM ranks MonthlyCharges #1 by split-count
+  (1002 splits, used often for small refinements) while SHAP ranks
+  Contract #1 by actual prediction impact (fewer splits, 193, but each
+  one swings the prediction more). Frequency of use ≠ size of impact.
 
 ### Design decisions made this phase
-- **Load vs retrain the champion model:** chose load-from-MLflow
-  (Option B) over retraining fresh in evaluate.py, so evaluation always
-  reflects the exact artifact actually compared and selected in
-  Phase 3, avoiding drift from re-running training a second time.
-- **Champion identification: config-driven run_id vs auto-pick by
-  ROC-AUC:** chose storing `champion_run_id` explicitly in
-  `config.yaml` over auto-selecting the top ROC-AUC run
-  programmatically. Reasoning: the actual champion selection was a
-  multi-metric human judgment call (F1 + recall + accuracy balance),
-  not a codified single-metric rule — auto-picking "max ROC-AUC" would
-  not have even selected the actual champion (it would have picked one
-  of the LR runs instead, confirmed when the new run's ROC-AUC ranking
-  was checked). Revisit auto-selection only if/when Phase 7 introduces
-  automated retraining with a codified selection rule.
+- **Load vs retrain the champion model:** chose load-from-MLflow over
+  retraining fresh, so evaluation reflects the exact artifact actually
+  selected in Phase 3, avoiding drift.
+- **Config-driven run_id vs auto-pick by ROC-AUC:** chose storing
+  `champion_run_id` explicitly over auto-selecting top ROC-AUC.
+  Reasoning: champion selection was a multi-metric human judgment call
+  (F1 + recall + accuracy balance) — auto-picking "max ROC-AUC" would
+  not have selected the actual champion (it would have picked an LR
+  run instead, both LR variants hit ROC-AUC ~0.862 vs LightGBM Tuned's
+  0.857). Revisit only if/when Phase 7 introduces automated retraining
+  with a codified selection rule.
+- **Re-fitting StandardScaler in evaluate.py (not loading a persisted
+  one):** confirmed safe here — no randomness, identical X_train data,
+  so the re-fit scaler is mathematically identical to train.py's.
+  Explicitly NOT the same situation as Phase 5's predict.py, where a
+  single new customer record has no training data to re-fit on (see
+  Open TODOs).
 
 ## Open TODOs (flagged, not yet fixed - relevant for later phases)
 
@@ -214,12 +246,14 @@ strips column names from the DataFrame, returning a plain NumPy array.
 Harmless — column order is preserved so predictions are still correct.
 Optional fix later: `StandardScaler.set_output(transform="pandas")`.
 
-## Not yet started (remainder of Phase 4)
-- Run and verify `get_confusion_matrix` / `plot_confusion_matrix`
-  against real data, interpret the FN ("missed churners") count
-- ROC curve plot for the champion model
-- SHAP values for feature importance/explainability, specific to the
-  LightGBM Tuned champion
+**[Resolved in Phase 4]** SHAP's `TreeExplainer.shap_values()` on newer
+SHAP versions returns a list of two arrays for binary classifiers
+(`[class_0_values, class_1_values]`) instead of one array. Fixed in
+`compute_shap_values()` via an `isinstance(shap_values, list)` check
+selecting index `[1]` (Churn class). Documenting here since it's a
+version-compatibility gotcha that could resurface if SHAP changes
+behavior again, or if this pattern is reused elsewhere (e.g. a future
+predict.py explainability feature).
 
 ## Not yet started (later phases)
 - Phase 5: predict.py, joblib serialization, fix the OneHotEncoder TODO, 
@@ -285,3 +319,15 @@ Optional fix later: `StandardScaler.set_output(transform="pandas")`.
   (e.g. "best ROC-AUC run") or read an explicitly stored decision — the
   right choice depends on whether the original selection was itself a
   codified single-metric rule or a human multi-metric judgment call.
+  - **Model blind spots are findings, not bugs:** false-negative analysis
+  (Phase 4) showed the champion systematically misses churners with
+  "safe" profiles (long tenure, long contract, has add-ons) — this is
+  an honest dataset limitation (no signal for price sensitivity,
+  competitor offers, support experience), not something to silently
+  patch. Worth stating explicitly rather than only reporting aggregate
+  recall.
+- **Frequency of use ≠ size of impact:** LightGBM's built-in
+  `feature_importances_` (split-count) and SHAP's mean |impact| can
+  rank features differently even when they agree on the top set —
+  cross-checking both gives a more credible "what matters" story than
+  relying on a single importance method.
