@@ -40,6 +40,8 @@ import mlflow
 import mlflow.sklearn
 import mlflow.xgboost
 import mlflow.lightgbm
+from sklearn.preprocessing import OneHotEncoder
+import joblib
 
 
 def load_processed_data(processed_dir, target_column):
@@ -112,6 +114,40 @@ def train_lightgbm(X_train, y_train, **kwargs):
     model.fit(X_train, y_train)
     
     return model
+
+
+def encode_nominal_features(X_train, X_test, nominal_cols):
+    """
+    One-hot encode nominal (unordered, 3+ category) columns using
+    sklearn's OneHotEncoder instead of pd.get_dummies.
+
+    Fit only on X_train's nominal columns, then used to transform both
+    X_train and X_test - same leakage-prevention principle as
+    scale_features() (test set categories don't influence the fit).
+    Fitting once (vs pd.get_dummies deriving columns fresh from
+    whatever data it's given) also means this encoder can be saved and
+    reused in predict.py, where a single new customer record won't have
+    every category present - get_dummies would produce a different/
+    wrong column set than training in that case.
+
+    drop='first' matches the original pd.get_dummies(drop_first=True)
+    behavior (avoids the dummy variable trap). handle_unknown='ignore'
+    means a category never seen during training won't crash predict.py
+    later - it just encodes as all-zeros for that customer instead.
+    """
+    encoder = OneHotEncoder(drop='first', handle_unknown='ignore', sparse_output=False)
+
+    X_train_nominal = encoder.fit_transform(X_train[nominal_cols])
+    X_test_nominal = encoder.transform(X_test[nominal_cols])
+
+    encoded_cols = encoder.get_feature_names_out(nominal_cols)
+    X_train_nominal_df = pd.DataFrame(X_train_nominal, columns=encoded_cols, index=X_train.index)
+    X_test_nominal_df = pd.DataFrame(X_test_nominal, columns=encoded_cols, index=X_test.index)
+
+    X_train_encoded = pd.concat([X_train.drop(columns=nominal_cols), X_train_nominal_df], axis=1)
+    X_test_encoded = pd.concat([X_test.drop(columns=nominal_cols), X_test_nominal_df], axis=1)
+
+    return X_train_encoded, X_test_encoded, encoder
 
 
 def scale_features(X_train, X_test):
@@ -212,6 +248,14 @@ def main():
     per the original Phase 3 scope. All runs land in the same MLflow
     experiment ("churn_prediction") for side-by-side comparison.
 
+    Also fits the nominal-column OneHotEncoder and StandardScaler here
+    (on X_train only, in that order) and saves both fitted objects via
+    joblib to config's artifacts.preprocessor_path / scaler_path. This
+    is what makes predict.py possible later - a single new customer
+    record has no training data to fit a fresh encoder/scaler on, so
+    the exact fitted objects from this training run must be persisted
+    and reloaded at inference time rather than recomputed.pyt
+
     Champion model (selected after comparing all 8 runs): LightGBM
     Tuned - best ROC-AUC and F1 of all runs, with recall close to the
     single highest recall achieved (LR balanced). See run #8's params
@@ -227,7 +271,20 @@ def main():
         config['data']['target_column']
     )
 
-    X_train_scaled, X_test_scaled, scaler = scale_features(X_train, X_test)
+    X_train_encoded, X_test_encoded, encoder = encode_nominal_features(
+        X_train, X_test, config['features']['nominal_cols']
+    )
+
+    X_train_scaled, X_test_scaled, scaler = scale_features(X_train_encoded, X_test_encoded)
+
+    # Persist the fitted encoder and scaler so predict.py can apply the
+    # exact same transformations to a single new customer record later,
+    # instead of re-deriving them (which isn't possible with only one row).
+    os.makedirs(os.path.dirname(config['artifacts']['preprocessor_path']), exist_ok=True)
+    joblib.dump(encoder, config['artifacts']['preprocessor_path'])
+    joblib.dump(scaler, config['artifacts']['scaler_path'])
+    print(f"Encoder saved to: {config['artifacts']['preprocessor_path']}")
+    print(f"Scaler saved to: {config['artifacts']['scaler_path']}")
     
     # --- Logistic Regression: baseline vs class-imbalance corrected ---
     baseline_params = {"max_iter": 1000, "random_state": 42}
