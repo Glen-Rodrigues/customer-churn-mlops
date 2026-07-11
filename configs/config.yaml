@@ -14,6 +14,7 @@ split:
 artifacts:
   model_dir: "models/"
   preprocessor_path: "artifacts/preprocessor.joblib"
+  scaler_path: "artifacts/scaler.joblib"
 
 # Feature classification for encoding (Phase 2)
 # These lists drive the encoding functions in data_preprocessing.py -
@@ -49,4 +50,4 @@ features:
 mlflow:
   tracking_uri: "sqlite:///mlflow.db"
   experiment_name: "churn_prediction"
-  champion_run_id: "f7146820b045405583b8c69498d113ec"
+  champion_run_id: "d7d6aea0f5bc4289a37aad468b751428"
