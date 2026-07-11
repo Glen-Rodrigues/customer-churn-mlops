@@ -81,29 +81,6 @@ def encode_ordinal_columns(df, ordinal_mappings):
     return df
 
 
-# TODO (Phase 5 - predict.py): pd.get_dummies derives one-hot columns from
-# whatever categories are present in the data it's given. This is fine here
-# since train/test both come from the same full dataset before splitting -
-# no statistical leakage, since get_dummies doesn't learn anything from
-# values, just category names. BUT a single new customer record (predict.py)
-# won't contain all categories, so get_dummies on it would produce a
-# different, wrong set of columns vs what the model was trained on.
-# Fix: switch to sklearn.preprocessing.OneHotEncoder, fit it once on
-# training data, save the fitted encoder with joblib (see config.yaml's
-# artifacts.preprocessor_path), and reuse that exact fitted encoder in
-# both train.py and predict.py so column sets always match.
-def encode_nominal_columns(df, nominal_cols):
-    """
-    One-hot encode nominal columns (3+ categories, no natural order).
-    drop_first=True avoids the dummy variable trap - if all the
-    remaining one-hot columns are 0, the model can infer the dropped
-    category, so we don't need it explicitly.
-    """
-    df = df.copy()
-    df = pd.get_dummies(df, columns=nominal_cols, drop_first=True)
-    return df
-
-
 def encode_target_column(df, target_column):
     """
     Map the target column (Churn) from Yes/No strings to 1/0.
@@ -184,7 +161,6 @@ def main():
     df = drop_identifier_column(df)
     df = encode_binary_columns(df, config['features']['binary_cols'])
     df = encode_ordinal_columns(df, config['features']['ordinal_mappings'])
-    df = encode_nominal_columns(df, config['features']['nominal_cols'])
     df = encode_target_column(df, config['data']['target_column'])
 
     X_train, X_test, y_train, y_test = split_features_target(
