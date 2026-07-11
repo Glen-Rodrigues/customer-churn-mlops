@@ -19,7 +19,7 @@ evaluate a DIFFERENT model than the one actually selected.
 import mlflow
 import mlflow.lightgbm
 from data_preprocessing import load_config
-from train import load_processed_data, scale_features, evaluate_model
+from train import load_processed_data, evaluate_model
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -28,6 +28,7 @@ from sklearn.metrics import roc_curve, auc
 import shap
 import numpy as np
 import pandas as pd
+import joblib
 
 
 def load_champion_model(config):
@@ -43,6 +44,40 @@ def load_champion_model(config):
     model_uri = f"runs:/{run_id}/model"
     model = mlflow.lightgbm.load_model(model_uri)
     return model
+
+
+def load_preprocessing_artifacts(config):
+    """
+    Load the fitted OneHotEncoder and StandardScaler that train.py
+    already saved via joblib, instead of re-fitting them here.
+
+    Same principle as loading the champion model itself rather than
+    retraining it: anything fit once during training should be
+    persisted and reloaded downstream, not silently recomputed - even
+    when recomputing happens to give identical numbers today, it risks
+    quietly drifting out of sync if the underlying data ever changes.
+    """
+    encoder = joblib.load(config['artifacts']['preprocessor_path'])
+    scaler = joblib.load(config['artifacts']['scaler_path'])
+    return encoder, scaler
+
+
+def apply_preprocessing(X, encoder, scaler, nominal_cols):
+    """
+    Apply an already-fitted encoder and scaler to data - transform
+    only, never fit. This is the same operation predict.py will need
+    to perform on a single new customer record later, so writing it as
+    its own reusable function here (rather than inlining it) means
+    predict.py can import and reuse this exact function unchanged.
+    """
+    X_nominal = encoder.transform(X[nominal_cols])
+    encoded_cols = encoder.get_feature_names_out(nominal_cols)
+    X_nominal_df = pd.DataFrame(X_nominal, columns=encoded_cols, index=X.index)
+
+    X_encoded = pd.concat([X.drop(columns=nominal_cols), X_nominal_df], axis=1)
+    X_scaled = scaler.transform(X_encoded)
+
+    return X_encoded, X_scaled
 
 
 def sanity_check_champion(model, X_test_scaled, y_test):
@@ -239,6 +274,14 @@ def main():
     model, sanity-check it against Phase 3 metrics, then run confusion
     matrix, ROC curve, SHAP, and false-negative analysis - all against
     the same loaded model and test set for consistency.
+
+    Preprocessing (encoding + scaling) uses the fitted OneHotEncoder
+    and StandardScaler train.py already saved via joblib
+    (load_preprocessing_artifacts + apply_preprocessing), rather than
+    re-fitting them here. This matches load_champion_model()'s own
+    principle - reload what was already fit during training instead of
+    silently recomputing it downstream, which could otherwise drift out
+    of sync if the underlying data ever changes.
     """
     config = load_config()
     mlflow.set_tracking_uri(config['mlflow']['tracking_uri'])
@@ -251,7 +294,13 @@ def main():
         config['data']['processed_dir'],
         config['data']['target_column']
     )
-    X_train_scaled, X_test_scaled, scaler = scale_features(X_train, X_test)
+    encoder, scaler = load_preprocessing_artifacts(config)
+    X_train_encoded, X_train_scaled = apply_preprocessing(
+        X_train, encoder, scaler, config['features']['nominal_cols']
+    )
+    X_test_encoded, X_test_scaled = apply_preprocessing(
+        X_test, encoder, scaler, config['features']['nominal_cols']
+    )
 
     sanity_check_champion(model, X_test_scaled, y_test)
 
@@ -263,11 +312,11 @@ def main():
     roc_auc = plot_roc_curve(model, X_test_scaled, y_test, "artifacts/roc_curve.png")
     print(f"ROC-AUC: {roc_auc:.4f}")
 
-    shap_values, X_test_df = compute_shap_values(model, X_test_scaled, X_train.columns)
+    shap_values, X_test_df = compute_shap_values(model, X_test_scaled, X_train_encoded.columns)
     plot_shap_summary(shap_values, X_test_df, "artifacts/shap_summary.png")
 
-    analyze_false_negatives(model, X_test, X_test_scaled, y_test)
-    compare_feature_importance(model, shap_values, X_train.columns)
+    analyze_false_negatives(model, X_test_encoded, X_test_scaled, y_test)
+    compare_feature_importance(model, shap_values, X_train_encoded.columns)
 
 
 if __name__ == "__main__":
