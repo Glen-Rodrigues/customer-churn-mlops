@@ -358,6 +358,17 @@ predict.py explainability feature).
   the run's logged metadata, mirroring the train_fn/log_fn dependency
   injection pattern already used in run_experiment().
 - Phase 8: README/report polish
+- Phase 9: Reproducibility + CI polish (not part of the original 8-phase
+  plan, added after a roadmap gap-check):
+  - Pin requirements.txt to exact installed versions (`pip freeze`),
+    once all phases are finalized - currently unpinned (e.g. "pandas"
+    instead of "pandas==2.x.x"), which risks "works on my machine"
+    behavior for anyone else setting up the project.
+  - Add a basic GitHub Actions workflow that runs `pytest` on every
+    push/PR. Sequenced after tests/test_preprocessing.py has real
+    content (Phase 5 leftover) - no point running CI against an empty
+    test file. Scope: just run the test suite, not full linting/
+    deployment automation - keeps it proportional to project size.
 
 ## Key learnings & principles (running list)
 - **Separation of concerns:** Pure ML functions stay MLflow-agnostic; 
