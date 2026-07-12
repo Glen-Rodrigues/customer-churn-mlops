@@ -129,6 +129,11 @@ close alternative if recall alone were the only priority.
 - Clean champion run: `run_id: f7146820b045405583b8c69498d113ec`, run
   name `polite-moth-290`. (Old run_id `43256d3aa45d4c529c132a465cfd1858`
   from the pre-cleanup duplicated store is stale/invalid.)
+- **[Updated in Phase 5]** MLflow store was deleted and train.py re-run
+  after the OneHotEncoder rework (see Phase 5 below), producing a new
+  run_id: `d7d6aea0f5bc4289a37aad468b751428`. Metrics verified
+  identical to the original champion (roc_auc 0.8572, f1 0.6476) before
+  updating config.yaml. This is now the current `champion_run_id`.
 - Confirmed by matching this run's metrics exactly to the documented
   LightGBM Tuned row (roc_auc 0.8572036705414721) — 3rd highest ROC-AUC
   out of 8, not 1st, consistent with the multi-metric selection
@@ -208,36 +213,116 @@ chains them, `if __name__ == "__main__": main()`).
   single new customer record has no training data to re-fit on (see
   Open TODOs).
 
+## Phase 5 — predict.py Infrastructure — COMPLETE
+
+### data_preprocessing.py / train.py restructuring
+- Nominal encoding moved out of data_preprocessing.py entirely - it now
+  stops after binary/ordinal encoding + target encoding, leaving nominal
+  columns as raw strings all the way through train.csv/test.csv.
+- train.py's main() now: loads data -> encode_nominal_features (fit on
+  X_train only) -> scale_features -> persist encoder + scaler via joblib
+  -> proceed with the existing 8-run MLflow comparison, unchanged.
+- Full re-run verified byte-for-byte equivalent metrics across all 8
+  runs vs. the pre-refactor table (see Phase 3), confirming the
+  OneHotEncoder swap didn't change model behavior, only fixed the
+  predict.py-breaking leakage/robustness issue.
+- config.yaml's champion_run_id updated to the new post-refactor run_id
+  (see Phase 4 section above for the specific value and verification).
+
+### evaluate.py updates (kept in sync with the pipeline change)
+- Added load_preprocessing_artifacts() (joblib.load for encoder +
+  scaler) and apply_preprocessing() (transform-only, no fitting) -
+  written explicitly for reuse in predict.py, not just for evaluate.py's
+  own needs.
+- main() updated to call these instead of re-deriving encoded/scaled
+  data inline; all downstream calls (SHAP, false-negative analysis,
+  importance comparison) updated to use the now-larger encoded column
+  set (X_train_encoded.columns, 29 cols after one-hot expansion) instead
+  of the original 19 raw columns. Verified: identical output to the
+  pre-refactor run across every printed number and saved plot.
+
+### predict.py — built and verified against real data
+- `load_artifacts(config)` - loads champion model, encoder, scaler, AND
+  the canonical raw feature column order (X_train.columns, loaded once
+  from train.csv). Returns all four.
+- `preprocess_customer_data(df, config, encoder, scaler, feature_columns)`
+  - reindexes incoming data to feature_columns FIRST, before any other
+  step. Works identically for a single customer (1-row df) or a batch
+  (multi-row df from CSV).
+- `predict_single(customer_dict, ...)` - wraps one customer dict into a
+  1-row DataFrame, returns {churn_probability, churn_prediction}.
+  **Verified:** sample new-customer profile (tenure=1, month-to-month,
+  electronic check, no add-ons - the highest-risk EDA/SHAP profile)
+  scored 0.9169 / "Yes", as expected.
+- `predict_from_csv(csv_path, ..., output_path=None)` - batch version,
+  reuses preprocess_customer_data() unchanged. Keeps customerID (and any
+  other non-feature columns) in the output for traceability, even though
+  they're dropped internally before reaching the model.
+- `main()` - CLI entry point (`python src/predict.py customers.csv`).
+- **Verified with a 3-row test CSV** covering distinct risk profiles:
+  new/month-to-month/no-addons (0.9169, Yes), long-tenure/2yr/full-addons
+  (0.1339, No), and a mixed-signal profile (0.8518, Yes) - all landed in
+  the expected relative order, and the single-customer test case matched
+  its CSV-batch result exactly (0.9169 both times), confirming
+  predict_single and predict_from_csv share identical underlying logic.
+
+### Bug found and fixed during development (not in original plan)
+- **Column-order fragility:** StandardScaler and LGBMClassifier both
+  operate on plain NumPy arrays once data reaches them - features are
+  identified by POSITION, not name. An early draft of predict.py built
+  the customer DataFrame directly from a caller-supplied dict with no
+  guaranteed column order, which would silently feed the model the
+  wrong feature in the wrong position if a caller's dict happened to be
+  ordered differently than training data - with no error, just a
+  confidently wrong prediction. Fixed by loading the canonical column
+  order from X_train.columns once (in load_artifacts) and reindexing
+  all incoming customer data to that exact order first thing in
+  preprocess_customer_data, with a clear ValueError if required columns
+  are missing.
+
+### Design decisions made this phase
+- **OneHotEncoder fit location (Option B chosen):** fit on X_train only,
+  after the split, moved into train.py alongside scale_features() -
+  rather than fitting on the full dataset pre-split in
+  data_preprocessing.py (Option A). Reasoning: matches the existing
+  leakage-prevention principle already established for StandardScaler;
+  low practical risk either way for this dataset, but Option B is the
+  more defensible/correct pattern to have learned.
+- **predict.py input formats:** supports both a single customer dict
+  (predict_single) and a batch CSV (predict_from_csv), sharing one core
+  preprocessing function. Reasoning: the single-record path is what a
+  future Phase 6 FastAPI endpoint will call directly; the CSV path adds
+  batch-scoring capability for near-zero extra cost since nothing about
+  the core logic needed to change to support both.
+
 ## Open TODOs (flagged, not yet fixed - relevant for later phases)
 
-**[Phase 5]** encode_nominal_columns uses pd.get_dummies, which derives 
-one-hot columns from whatever categories are present in the data given 
-to it. Fine for train/test (same source data, no statistical leakage). 
-NOT fine for predict.py - a single new customer record won't have all 
-categories present, so get_dummies on it would produce a different/wrong 
-column set than training.
-Plan: switch to sklearn.preprocessing.OneHotEncoder, fit once on training 
-data, save fitted encoder via joblib to config's artifacts.preprocessor_path, 
-reuse the same fitted encoder in train.py and predict.py.
+**[Resolved in Phase 5]** encode_nominal_columns (pd.get_dummies) removed
+from data_preprocessing.py entirely. Replaced with encode_nominal_features()
+in train.py using sklearn.preprocessing.OneHotEncoder, fit on X_train only
+(after the split - Option B, matching StandardScaler's leakage-prevention
+pattern) with drop='first' (matches old drop_first=True) and
+handle_unknown='ignore' (so an unseen category at prediction time encodes
+as all-zeros instead of crashing). Fitted encoder saved via joblib to
+config's artifacts.preprocessor_path. Verified: all 8 MLflow re-run metrics
+matched the pre-refactor numbers exactly, confirming mathematical
+equivalence to the old get_dummies pipeline.
 
-**[Phase 5]** `scale_features()` in train.py fits a StandardScaler on
-X_train and returns it (per its own docstring, "for reuse in predict.py"),
-but train.py's main() never actually saves that fitted scaler anywhere.
-Harmless today - evaluate.py re-fits an identical scaler on the same
-X_train, which is mathematically safe since StandardScaler has no
-randomness and the data doesn't change. NOT safe for predict.py: a single
-new customer record has no "training data" to fit a fresh scaler on, so
-the exact fitted scaler must be persisted and reloaded, not recomputed.
-Plan: save via joblib to a config path (same pattern as the OneHotEncoder
-TODO above - possibly the same artifacts.preprocessor_path, or a
-dedicated scaler_path), fit once in train.py, reuse in predict.py.
+**[Resolved in Phase 5]** StandardScaler now saved via joblib to a
+dedicated config path (artifacts.scaler_path, separate from
+preprocessor_path) inside train.py's main(), right after fitting.
+evaluate.py updated to load both the encoder and scaler via joblib
+(load_preprocessing_artifacts()) instead of re-fitting them - closes the
+"re-fit vs load" inconsistency noted when this TODO was first resolved
+partially. apply_preprocessing() (in evaluate.py) applies the loaded
+encoder/scaler without fitting, and is reused unchanged by predict.py.
 
-**[Phase 5]** `from data_preprocessing import load_config` (used in both
-train.py and data_preprocessing.py) works when running scripts directly
-via `python src/train.py`, but will NOT work automatically the same way
-once tests/test_preprocessing.py (a sibling folder to src/) tries to
-import from src/ - pytest's import context is different. Confirmed as a
-real (not yet solved) gotcha to address when Phase 5 testing work begins.
+**[Resolved in Phase 5]** Fixed via tests/conftest.py, which pytest
+auto-loads before any test in that folder and which adds src/ to
+Python's module search path. Verified with
+`python -m pytest tests/ --collect-only` (succeeded with "no tests
+collected", zero import errors) before any real test content was
+written - confirms the path fix works independent of test content.
 
 **[Minor, cosmetic]** `evaluate.py` prints a sklearn UserWarning
 ("X does not have valid feature names, but LGBMClassifier was fitted
@@ -256,9 +341,6 @@ behavior again, or if this pattern is reused elsewhere (e.g. a future
 predict.py explainability feature).
 
 ## Not yet started (later phases)
-- Phase 5: predict.py, joblib serialization, fix the OneHotEncoder TODO, 
-  fix the src/ import path issue, actual tests in 
-  tests/test_preprocessing.py
 - Phase 6: FastAPI + Docker (api/app.py currently an empty placeholder)
 - Phase 7: Evidently monitoring, optional Streamlit dashboard. If automated
   retraining + auto-selection of the champion (by e.g. highest ROC-AUC) is
@@ -331,3 +413,16 @@ predict.py explainability feature).
   rank features differently even when they agree on the top set —
   cross-checking both gives a more credible "what matters" story than
   relying on a single importance method.
+- **Column order is a silent failure mode, not just a style concern:**
+  once data reaches StandardScaler/LGBMClassifier as a NumPy array,
+  features are identified by position only - a caller-supplied dict
+  or CSV in a different column order than training would produce a
+  confidently wrong prediction with no error. The fix (predict.py,
+  Phase 5) is to load and enforce the canonical training-time column
+  order explicitly, rather than assuming input data arrives correctly
+  ordered.
+- **A function's true test is being called from somewhere new:**
+  apply_preprocessing() (evaluate.py, Phase 4) was designed for reuse in
+  predict.py "on paper" - Phase 5 confirmed it actually worked unchanged
+  when a second caller (predict.py) used it, validating the reuse
+  design rather than just assuming it.
