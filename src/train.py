@@ -254,7 +254,7 @@ def main():
     is what makes predict.py possible later - a single new customer
     record has no training data to fit a fresh encoder/scaler on, so
     the exact fitted objects from this training run must be persisted
-    and reloaded at inference time rather than recomputed.pyt
+    and reloaded at inference time rather than recomputed
 
     Champion model (selected after comparing all 8 runs): LightGBM
     Tuned - best ROC-AUC and F1 of all runs, with recall close to the
