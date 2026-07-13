@@ -12,7 +12,6 @@ split:
 
 # Where artifacts get saved (we'll use this from Phase 5 onward)
 artifacts:
-  model_dir: "models/"
   preprocessor_path: "artifacts/preprocessor.joblib"
   scaler_path: "artifacts/scaler.joblib"
 
