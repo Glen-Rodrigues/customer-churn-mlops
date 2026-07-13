@@ -1,7 +1,7 @@
 # Customer Churn MLOps — Project Status
 
-Last updated: [Phase 4 in progress - MLflow setup fixed, champion model
-loading verified, confusion matrix code written (not yet run)]
+Last updated: [Phase 9 complete - tests/test_preprocessing.py has real
+content, requirements.txt pinned, GitHub Actions CI passing]
 
 ## Completed
 
@@ -295,6 +295,59 @@ chains them, `if __name__ == "__main__": main()`).
   batch-scoring capability for near-zero extra cost since nothing about
   the core logic needed to change to support both.
 
+## Phase 9 — Reproducibility + CI — COMPLETE
+
+### tests/test_preprocessing.py — now has real content (closes Phase 5 leftover)
+- 6 tests for data_preprocessing.py's pure functions: clean_total_charges
+  (blank-space -> 0.0 + no-mutation check), drop_identifier_column,
+  encode_binary_columns, encode_ordinal_columns (order preservation),
+  encode_target_column, split_features_target (shape/no-leakage/
+  reproducibility).
+- 2 tests for predict.py's preprocess_customer_data() - these test the
+  actual column-order bug found and fixed in Phase 5, not just mapping
+  logic, so they carry more regression value than the six above:
+  - test_preprocess_customer_data_is_column_order_independent - builds
+    one customer as two dicts (correct key order vs. deliberately
+    scrambled), asserts identical scaled output. Verified this actually
+    catches a regression by temporarily disabling the reindex line in
+    predict.py and confirming the test failed, before restoring it.
+  - test_preprocess_customer_data_raises_on_missing_field - confirms a
+    ValueError naming the missing field is raised when a required
+    column is absent from the input.
+- Design choice (deliberately parked, not a bug): the column-order test
+  fits a tiny real OneHotEncoder/StandardScaler in-memory via a pytest
+  fixture, rather than loading the actual joblib artifacts from disk
+  via load_preprocessing_artifacts(). Keeps the test fast and
+  independent of whether a trained model exists on disk (works on a
+  fresh clone before train.py has ever been run) - at the cost of not
+  proving the *actual* persisted artifacts behave identically. Revisit
+  only if a real-artifact integration test becomes worth the added CI
+  complexity.
+- All 9 tests verified passing via `python -m pytest tests/ -v`.
+
+### requirements.txt — pinned
+- Replaced the unpinned package-name list with exact versions from
+  `pip freeze` run in the real project environment (not a fresh
+  throwaway install), so the pin reflects what actually trained and
+  saved the champion model.
+- Fixed two Windows-only transitive dependencies that `pip freeze`
+  flattens in unconditionally: `pywin32==312` and `pywinpty==3.0.5`
+  both got a `; sys_platform == "win32"` marker added, so pip installs
+  them on Windows but skips them cleanly on Linux. `pywinpty` was
+  confirmed to hard-fail Linux CI (Rust build error, Windows-only code
+  path gated behind `#[cfg(windows)]`) via an actual failed GitHub
+  Actions run before the marker was added.
+
+### .github/workflows/tests.yml — added
+- Runs on every `push` and `pull_request`, no branch filter.
+- `ubuntu-latest` runner, Python 3.13 (matches local dev version
+  3.13.5).
+- Steps: checkout -> setup Python -> `pip install -r requirements.txt`
+  -> `pytest tests/ -v`.
+- Deliberately no DVC pull step - none of the current tests touch real
+  data or trained artifacts, so a bare checkout is sufficient.
+- Confirmed working end-to-end after the pywinpty fix - CI run passed.
+
 ## Open TODOs (flagged, not yet fixed - relevant for later phases)
 
 **[Resolved in Phase 5]** encode_nominal_columns (pd.get_dummies) removed
@@ -358,17 +411,6 @@ predict.py explainability feature).
   the run's logged metadata, mirroring the train_fn/log_fn dependency
   injection pattern already used in run_experiment().
 - Phase 8: README/report polish
-- Phase 9: Reproducibility + CI polish (not part of the original 8-phase
-  plan, added after a roadmap gap-check):
-  - Pin requirements.txt to exact installed versions (`pip freeze`),
-    once all phases are finalized - currently unpinned (e.g. "pandas"
-    instead of "pandas==2.x.x"), which risks "works on my machine"
-    behavior for anyone else setting up the project.
-  - Add a basic GitHub Actions workflow that runs `pytest` on every
-    push/PR. Sequenced after tests/test_preprocessing.py has real
-    content (Phase 5 leftover) - no point running CI against an empty
-    test file. Scope: just run the test suite, not full linting/
-    deployment automation - keeps it proportional to project size.
 
 ## Key learnings & principles (running list)
 - **Separation of concerns:** Pure ML functions stay MLflow-agnostic; 
@@ -437,3 +479,12 @@ predict.py explainability feature).
   predict.py "on paper" - Phase 5 confirmed it actually worked unchanged
   when a second caller (predict.py) used it, validating the reuse
   design rather than just assuming it.
+- **pip freeze flattens away platform context:** running `pip freeze`
+  on Windows bakes in Windows-only transitive dependencies (pywin32,
+  pywinpty) with no indication they're conditional - PEP 508
+  environment markers (`; sys_platform == "win32"`) have to be added
+  back in by hand for the pinned file to install cleanly on Linux CI.
+- **A regression test should be proven to fail, not just proven to
+  pass:** for the column-order test (Phase 9), the reindex line in
+  predict.py was temporarily disabled to confirm the test actually
+  fails without the fix, before trusting that it protects anything.
