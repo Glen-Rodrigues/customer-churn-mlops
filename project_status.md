@@ -1,7 +1,10 @@
 # Customer Churn MLOps — Project Status
 
-Last updated: [Phase 9 complete - tests/test_preprocessing.py has real
-content, requirements.txt pinned, GitHub Actions CI passing]
+Last updated: [Phase 9 complete + post-completion cleanup pass -
+tests/test_preprocessing.py has real content, requirements.txt pinned
+(and re-saved as proper UTF-8), GitHub Actions CI passing, dead config
+removed, evaluation plots now tracked in docs/plots/ for portfolio
+visibility]
 
 ## Completed
 
@@ -348,6 +351,57 @@ chains them, `if __name__ == "__main__": main()`).
   data or trained artifacts, so a bare checkout is sufficient.
 - Confirmed working end-to-end after the pywinpty fix - CI run passed.
 
+## Phase 9.5 — Post-Completion Cleanup + Hygiene Fixes
+
+After Phase 9 was marked complete, Claude did a full read-through of
+every non-data file in the repo (config, src/, tests/, CI workflow,
+.gitignore, DVC pointer files, README) against this status doc to
+check everything documented actually matches the code. Found four
+real, previously-undocumented issues, all now resolved:
+
+- **`requirements.txt` was UTF-16-encoded, not UTF-8.** Root cause:
+  `pip freeze > requirements.txt` in Windows PowerShell defaults to
+  UTF-16 unless `-Encoding utf8` is passed explicitly. It happened to
+  still install fine (pip 24+ auto-detects encoding), so CI wasn't
+  actually broken, but it was fragile and non-standard. **Fixed** by
+  regenerating via `pip freeze | Out-File -Encoding utf8
+  requirements.txt` and confirming via byte inspection
+  (`Get-Content -Encoding Byte -TotalCount 4` → `239 187 191 97` = a
+  UTF-8 BOM followed by the first character - genuine UTF-8 now, not
+  UTF-16). The Windows-only `pywin32`/`pywinpty` markers (see Phase 9
+  above) had to be re-applied after regenerating, since a fresh
+  `pip freeze` overwrites them.
+- **`mlflow.set_experiment("churn_prediction")` was hardcoded in
+  `train.py`**, even though `config.yaml` already had
+  `mlflow.experiment_name: "churn_prediction"` sitting unused right
+  next to it - a direct contradiction of the "no MLflow settings
+  hardcoded" principle documented in Phase 4. **Fixed** by reading
+  `config['mlflow']['experiment_name']` instead.
+- **`config.yaml`'s `artifacts.model_dir: "models/"` was dead
+  config** - grepped across all of `src/` and confirmed it was never
+  referenced anywhere. Root cause: a leftover from before MLflow
+  became the actual model-loading path (`load_champion_model()` loads
+  from the MLflow artifact store via `runs:/{run_id}/model`, not from
+  a local `models/` folder). **Fixed** by deleting the `model_dir` key
+  from `config.yaml`, deleting the now-pointless `models/` folder
+  (`git rm -r models/`), and removing the matching dead rules
+  (`models/*.pkl`, `models/*.joblib`, `models/*.h5`, `models/*.onnx`)
+  from `.gitignore`.
+- **Evaluation plots (`confusion_matrix.png`, `roc_curve.png`,
+  `shap_summary.png`) were fully gitignored via `artifacts/*`**,
+  meaning nobody browsing the GitHub repo could see them without
+  cloning and re-running the pipeline - a missed opportunity for a
+  portfolio project where these are exactly what a recruiter would
+  want to see. **Fixed** by creating a separate, tracked `docs/plots/`
+  folder (not covered by the `artifacts/*` gitignore rule) and
+  copying the three current plots there for direct README embedding
+  in Phase 8. Deliberately a manual copy, not automated - these are
+  point-in-time snapshots of the current champion model, so if the
+  champion is ever retrained/replaced, `docs/plots/` needs to be
+  manually refreshed and recommitted, or it will silently go stale
+  relative to the live model. Revisit only if this drift becomes an
+  actual problem worth automating around.
+
 ## Open TODOs (flagged, not yet fixed - relevant for later phases)
 
 **[Resolved in Phase 5]** encode_nominal_columns (pd.get_dummies) removed
@@ -488,3 +542,17 @@ predict.py explainability feature).
   pass:** for the column-order test (Phase 9), the reindex line in
   predict.py was temporarily disabled to confirm the test actually
   fails without the fix, before trusting that it protects anything.
+- **PowerShell's `>` redirection defaults to UTF-16, not UTF-8:** any
+  command piped into plain `> file.txt` (e.g. `pip freeze >
+  requirements.txt`) on Windows PowerShell silently produces a
+  UTF-16-encoded file. Tools that expect plain text (pip, most Linux
+  CLI tools, some editors) may not handle this consistently - use
+  `| Out-File -Encoding utf8` explicitly instead of `>` when the
+  output needs to be portable.
+- **A "finished" phase is worth a second read-through pass:** the
+  Phase 9.5 cleanup (dead config, hardcoded experiment name, file
+  encoding, untracked evaluation plots) was only found by re-reading
+  every file against project_status.md after Phase 9 was already
+  marked complete - none of these were caught during the phase itself.
+  Worth doing this kind of pass occasionally rather than only trusting
+  in-the-moment verification.
