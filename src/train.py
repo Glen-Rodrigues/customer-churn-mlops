@@ -330,7 +330,7 @@ def main():
         "learning_rate": 0.05,
     }
 
-    mlflow.set_experiment("churn_prediction")
+    mlflow.set_experiment(config['mlflow']['experiment_name'])
     run_experiment(train_logistic_regression, mlflow.sklearn.log_model, baseline_params, X_train_scaled, y_train, X_test_scaled, y_test)
     run_experiment(train_logistic_regression, mlflow.sklearn.log_model, balanced_params, X_train_scaled, y_train, X_test_scaled, y_test)
     run_experiment(train_xgboost, mlflow.xgboost.log_model, xgb_params, X_train_scaled, y_train, X_test_scaled, y_test)
