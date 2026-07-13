@@ -1,0 +1,42 @@
+# Runs the pytest suite on every push and pull request.
+#
+# Scope is deliberately small, matching the project's current size:
+# just run the tests, nothing else. No linting, no deployment, no
+# Docker build here - those can be added later if the project grows
+# into needing them (see Phase 9 notes in project_status.md).
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Pulls your repo code onto the runner so later steps can see it
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Sets up Python on the runner - version pinned to match what
+      # you actually develop with locally, so CI behaves the same way
+      # your machine does.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Installs every package from requirements.txt (now pinned) into
+      # this fresh runner - proving the pinned versions are actually
+      # enough to reproduce a working environment from scratch.
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Runs the full test suite. This job intentionally does NOT need
+      # your real data or trained model artifacts - tests/test_preprocessing.py
+      # only uses small hand-built DataFrames and fixture-fitted
+      # encoder/scaler objects, so it works on a bare checkout with
+      # nothing else pulled from DVC or MLflow.
+      - name: Run tests
+        run: pytest tests/ -v
