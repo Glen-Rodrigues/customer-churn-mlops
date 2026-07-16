@@ -4,7 +4,8 @@ Last updated: [Phase 9 complete + post-completion cleanup pass -
 tests/test_preprocessing.py has real content, requirements.txt pinned
 (and re-saved as proper UTF-8), GitHub Actions CI passing, dead config
 removed, evaluation plots now tracked in docs/plots/ for portfolio
-visibility]
+visibility. Phase 6 now in progress: api/app.py built and verified
+end-to-end; Dockerfile not yet started.]
 
 ## Completed
 
@@ -298,6 +299,87 @@ chains them, `if __name__ == "__main__": main()`).
   batch-scoring capability for near-zero extra cost since nothing about
   the core logic needed to change to support both.
 
+## Phase 6 — FastAPI + Docker — IN PROGRESS (api/app.py done, Dockerfile not started)
+
+### api/app.py — built and verified end-to-end against the real champion model
+Wraps predict.py's existing predict_single() in a REST API - deliberately
+contains NO new prediction logic, purely a translation layer (HTTP
+request -> dict -> predict_single() -> dict -> HTTP response), so nothing
+already tested in Phase 5/9 gets reimplemented or duplicated.
+
+- `sys.path` manipulation at the top of api/app.py adds `src/` to the
+  import path, mirroring the exact same fix tests/conftest.py already
+  applies for pytest - api/ and src/ are sibling folders, so Python
+  doesn't auto-discover one from the other.
+- `CustomerData` (Pydantic model) - mirrors the 19 raw feature columns
+  the model was trained on (config.yaml's binary_cols/nominal_cols/
+  ordinal_mappings, plus the 4 already-numeric passthrough columns:
+  SeniorCitizen, tenure, MonthlyCharges, TotalCharges).
+- `PredictionResponse` (Pydantic model) - churn_probability (float) +
+  churn_prediction (str), matching predict_single()'s existing return shape.
+- `lifespan()` (FastAPI startup/shutdown hook) - loads the champion
+  model + encoder + scaler + feature_columns via predict.py's existing
+  `load_artifacts()` ONCE when the server starts, stored in a module-level
+  `ml_artifacts` dict for every request to reuse. Deliberately NOT loaded
+  inside the /predict function itself - would re-read MLflow/joblib
+  artifacts from disk on every single request for no benefit, since the
+  model never changes between requests.
+- `CONFIG_PATH` built from `__file__` (not a relative string) - so
+  config.yaml resolves correctly regardless of what directory the
+  process is launched from, which matters once this runs inside Docker
+  with a different working-directory setup than local dev.
+- `/health` - trivial liveness check, no model logic, useful for Docker
+  healthchecks later.
+- `/predict` - accepts CustomerData, calls predict_single() unchanged,
+  returns PredictionResponse.
+
+### Design decision: strict Pydantic validation (Literal types) chosen
+Every categorical field (InternetService, Contract, PaymentMethod, etc.)
+uses `Literal[...]` instead of plain `str`, so a typo like
+`"Fiber Optic"` (wrong case) is rejected at the API boundary with a
+clear 422 error - BEFORE it reaches the model. Reasoning: without this,
+a typo would silently be treated as an "unknown category" by the
+OneHotEncoder (`handle_unknown='ignore'`) and produce a confidently
+wrong prediction with no error at all - same failure class as the
+column-order bug found and fixed in Phase 5. Encoder's leniency is for
+genuinely novel categories in real-world data; Pydantic's strictness is
+for catching caller typos - each guards a different failure mode.
+
+### Design decision (deferred to Dockerfile step): how the image gets
+model files
+mlruns/, mlflow.db, and artifacts/*.joblib are all gitignored, so a
+bare `git clone` doesn't include them. Decided to COPY them in from the
+local machine at Docker build time (works today, since they already
+exist locally from training) rather than setting up a DVC remote +
+`dvc pull` inside the build (more "correct" long-term, but a bigger
+lift - no remote is configured yet, `.dvc/config` is currently empty -
+and out of scope for a portfolio-project Phase 6; revisit only if this
+ever needs to run reproducibly in CI or on a machine that never ran
+train.py locally).
+
+### Verified end-to-end (real champion model, not synthetic)
+Ran `uvicorn api.app:app --reload` locally against the real trained
+artifacts:
+- Startup logs confirmed the MLflow model download + clean
+  "Application startup complete" with no errors.
+- `GET /health` -> `{"status":"ok"}` (200 OK).
+- `POST /predict` with a real high-risk customer profile -> real
+  prediction returned (`churn_probability: 0.9183, churn_prediction:
+  "Yes"`) - in the same range as Phase 5's predict.py result (0.9169)
+  for a similar profile; not an exact match since the test profile's
+  MonthlyCharges/TotalCharges were placeholder values, not the exact
+  Phase 5 CSV row. Worth rerunning with the exact Phase 5 row once, to
+  confirm an exact match between predict.py and the API.
+- `POST /predict` with a deliberately misspelled category
+  (`"Fiber Optic"` instead of `"Fiber optic"`) -> correctly rejected
+  with a 422 and a clear message naming the field and valid values,
+  proving strict validation actually blocks bad input rather than
+  silently mispredicting.
+
+### Not yet done
+- Dockerfile itself (currently an empty placeholder)
+- Docker build + container run verification
+
 ## Phase 9 — Reproducibility + CI — COMPLETE
 
 ### tests/test_preprocessing.py — now has real content (closes Phase 5 leftover)
@@ -448,7 +530,8 @@ behavior again, or if this pattern is reused elsewhere (e.g. a future
 predict.py explainability feature).
 
 ## Not yet started (later phases)
-- Phase 6: FastAPI + Docker (api/app.py currently an empty placeholder)
+- Phase 6: Dockerfile + container verification (api/app.py itself is
+  done and verified - see Phase 6 section above)
 - Phase 7: Evidently monitoring, optional Streamlit dashboard. If automated
   retraining + auto-selection of the champion (by e.g. highest ROC-AUC) is
   introduced here, note that `load_champion_model()` in evaluate.py
