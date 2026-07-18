@@ -1,11 +1,13 @@
 # Customer Churn MLOps — Project Status
 
-Last updated: [Phase 9 complete + post-completion cleanup pass -
-tests/test_preprocessing.py has real content, requirements.txt pinned
-(and re-saved as proper UTF-8), GitHub Actions CI passing, dead config
-removed, evaluation plots now tracked in docs/plots/ for portfolio
-visibility. Phase 6 now in progress: api/app.py built and verified
-end-to-end; Dockerfile not yet started.]
+Last updated: [Phase 6 in progress - api/app.py built and verified
+end-to-end (unchanged from before). Dockerfile now WRITTEN and fully
+commented, but NOT yet built or run - blocked on Docker Desktop
+installation on the local Windows machine (also runs VMware
+Workstation; confirmed modern VMware + WSL2/Hyper-V coexistence is
+supported, proceeding with install). `docker build` has not been
+executed yet - that's the next step once Docker install is verified
+working.]
 
 ## Completed
 
@@ -299,7 +301,7 @@ chains them, `if __name__ == "__main__": main()`).
   batch-scoring capability for near-zero extra cost since nothing about
   the core logic needed to change to support both.
 
-## Phase 6 — FastAPI + Docker — IN PROGRESS (api/app.py done, Dockerfile not started)
+## Phase 6 — FastAPI + Docker — IN PROGRESS (api/app.py done; Dockerfile written + commented, not yet built/run)
 
 ### api/app.py — built and verified end-to-end against the real champion model
 Wraps predict.py's existing predict_single() in a REST API - deliberately
@@ -376,9 +378,66 @@ artifacts:
   proving strict validation actually blocks bad input rather than
   silently mispredicting.
 
+### Dockerfile — written and fully commented (not yet built/run)
+Built part-by-part with Claude teaching each concept (image vs.
+container, layers, caching) before writing the corresponding lines.
+
+- `FROM python:3.13-slim` - matches CI/local Python version exactly;
+  slim variant keeps image size down.
+- `WORKDIR /app` - anchors all relative paths inside the container to
+  `/app`, so config.yaml paths and api/app.py's `__file__`-based
+  CONFIG_PATH resolve consistently regardless of launch context.
+- `COPY requirements.txt .` then `RUN pip install --no-cache-dir -r
+  requirements.txt` done BEFORE copying any code - deliberate layer-
+  caching ordering: requirements.txt changes rarely, src/api code
+  changes often, so most rebuilds skip re-installing every package
+  and only redo the fast "copy code" layers below.
+- Explicit per-folder `COPY` lines (`src/`, `api/`, `configs/`,
+  `mlruns/`, `mlflow.db`, `artifacts/`) instead of one `COPY . .` -
+  keeps caching granular and avoids shipping `.git/`, `notebooks/`,
+  `tests/`, `__pycache__/` etc. into the image.
+- `COPY mlruns/ ./mlruns/`, `COPY mlflow.db ./mlflow.db`,
+  `COPY artifacts/ ./artifacts/` - implements the Phase 6 design
+  decision (local COPY at build time instead of DVC remote/`dvc
+  pull`). Explicit tradeoff documented in-file: this Dockerfile can
+  only build successfully on a machine that already has these three
+  gitignored paths populated locally (i.e. one that's already run
+  train.py) - a DVC remote is the more "correct" long-term fix,
+  deliberately parked for later.
+- `EXPOSE 8000` - documentation/contract only, does not itself publish
+  the port; that happens at `docker run -p` time.
+- `CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port",
+  "8000"]` - exec-form array (not shell-string form); `api.app:app`
+  resolves via the `api/` folder + `WORKDIR /app`; `--host 0.0.0.0` is
+  required (not optional) since the default `127.0.0.1` would only
+  accept connections from inside the container itself, causing every
+  external request to silently time out.
+
+### Blocked on: Docker Desktop installation (local machine)
+- Attempted `docker build -t churn-api .` from repo root - failed,
+  Docker not yet installed on the Windows machine
+  (`CommandNotFoundException` in PowerShell).
+- Local machine also runs VMware Workstation. Checked compatibility:
+  modern VMware Workstation (15.5.5+) supports the Windows Hypervisor
+  Platform and coexists with WSL2/Hyper-V (which Docker Desktop uses
+  on Windows) - some performance overhead possible, but should not be
+  a blocker. Proceeding with Docker Desktop install.
+- Confirmed target architecture: **amd64** (VMware Workstation itself
+  doesn't run on ARM64 Windows, which was enough to confirm without
+  needing to check System Settings directly).
+- **Next steps once Docker Desktop is installed + verified**
+  (`docker --version` and `docker run hello-world` both succeed):
+  run `docker build -t churn-api .` from repo root for the first real
+  build attempt.
+
 ### Not yet done
-- Dockerfile itself (currently an empty placeholder)
-- Docker build + container run verification
+- Docker Desktop installation + verification on local machine (in
+  progress - see "Blocked on" above)
+- `docker build` - first real build attempt (Dockerfile is ready, just
+  never actually run yet)
+- Docker container run + `/health` and `/predict` verification against
+  the real champion model (parity check with Phase 6's native
+  uvicorn run, which returned churn_probability: 0.9183)
 
 ## Phase 9 — Reproducibility + CI — COMPLETE
 
@@ -530,8 +589,9 @@ behavior again, or if this pattern is reused elsewhere (e.g. a future
 predict.py explainability feature).
 
 ## Not yet started (later phases)
-- Phase 6: Dockerfile + container verification (api/app.py itself is
-  done and verified - see Phase 6 section above)
+- Phase 6: Dockerfile is written and commented (see Phase 6 section
+  above) but not yet built or run - waiting on Docker Desktop install
+  on the local machine, then `docker build` + container verification
 - Phase 7: Evidently monitoring, optional Streamlit dashboard. If automated
   retraining + auto-selection of the champion (by e.g. highest ROC-AUC) is
   introduced here, note that `load_champion_model()` in evaluate.py
