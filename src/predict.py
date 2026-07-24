@@ -15,21 +15,49 @@ only correct option.
 
 import pandas as pd
 import mlflow
+import mlflow.lightgbm
+import joblib
 from data_preprocessing import (
     load_config,
     clean_total_charges,
     encode_binary_columns,
     encode_ordinal_columns,
 )
-from train import load_processed_data
-from evaluate import load_champion_model, load_preprocessing_artifacts, apply_preprocessing
+from evaluate import load_preprocessing_artifacts, apply_preprocessing
+
+
+def load_champion_model_from_export(config):
+    """
+    Load the champion model from its self-contained exported copy
+    (config['artifacts']['champion_model_dir']) instead of through
+    MLflow's tracking store (runs:/{run_id}/model).
+
+    evaluate.py's load_champion_model() resolves the model through
+    mlflow.db, which records the ABSOLUTE local filesystem path to
+    each run's artifacts from the machine train.py was run on - fine
+    for local evaluation, but broken inside Docker, where that path
+    doesn't exist. This function instead loads directly from a plain
+    local folder (produced once by export_champion_model.py, which
+    must be rerun whenever champion_run_id changes) - just files on
+    disk, no tracking-store lookup, portable to any machine/container.
+
+    Deliberately kept separate from evaluate.py's load_champion_model()
+    rather than replacing it: evaluate.py's local workflow (SHAP plots,
+    confusion matrix, etc.) is meant to reflect the exact tracked run
+    by run_id, while predict.py (used by both the CLI and the Docker
+    API) only needs a working, loadable copy of that same model.
+    """
+    model_dir = config['artifacts']['champion_model_dir']
+    model = mlflow.lightgbm.load_model(model_dir)
+    return model
 
 
 def load_artifacts(config):
     """
     Load everything predict.py needs, once: the champion model (from
-    MLflow), the fitted encoder/scaler (from joblib), and the exact
-    raw feature column order training used (from train.csv itself).
+    its exported local folder - see load_champion_model_from_export),
+    the fitted encoder/scaler (from joblib), and the exact raw feature
+    column order training used (from a small joblib artifact).
 
     That column order is loaded here - not hardcoded, not assumed from
     whatever order a caller's dict happens to be in - because
@@ -38,15 +66,15 @@ def load_artifacts(config):
     A new customer's data must be forced into this exact same column
     order before anything else, or the model would silently score the
     wrong feature in the wrong position with no error at all.
-    """
-    mlflow.set_tracking_uri(config['mlflow']['tracking_uri'])
-    model = load_champion_model(config)
-    encoder, scaler = load_preprocessing_artifacts(config)
 
-    X_train, _, _, _ = load_processed_data(
-        config['data']['processed_dir'], config['data']['target_column']
-    )
-    feature_columns = X_train.columns.tolist()
+    Note: no mlflow.set_tracking_uri() call here anymore - none of
+    these three loads (model, encoder/scaler, feature_columns) touch
+    the tracking store; they're all plain local files now. Setting a
+    tracking URI that's never used would just be dead code.
+    """
+    model = load_champion_model_from_export(config)
+    encoder, scaler = load_preprocessing_artifacts(config)
+    feature_columns = joblib.load(config['artifacts']['feature_columns_path'])
 
     return model, encoder, scaler, feature_columns
 

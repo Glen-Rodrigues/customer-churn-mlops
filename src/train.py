@@ -285,6 +285,19 @@ def main():
     joblib.dump(scaler, config['artifacts']['scaler_path'])
     print(f"Encoder saved to: {config['artifacts']['preprocessor_path']}")
     print(f"Scaler saved to: {config['artifacts']['scaler_path']}")
+
+    # Persist the RAW (pre-one-hot) column order too - this is the exact
+    # order predict.py's preprocess_customer_data() reindexes incoming
+    # customer data to, before any encoding happens. Previously predict.py
+    # re-derived this by reading train.csv directly at inference time,
+    # which meant the Docker API image had to ship the entire training
+    # dataset just to read off X_train.columns - unnecessary, and it broke
+    # `docker run` since data/processed/ was never copied into the image.
+    # Saving it once here (same principle as encoder/scaler: persist what
+    # was already computed, don't silently re-derive it downstream) means
+    # predict.py only needs this small list, not the full CSVs.
+    joblib.dump(X_train.columns.tolist(), config['artifacts']['feature_columns_path'])
+    print(f"Feature columns saved to: {config['artifacts']['feature_columns_path']}")
     
     # --- Logistic Regression: baseline vs class-imbalance corrected ---
     baseline_params = {"max_iter": 1000, "random_state": 42}
