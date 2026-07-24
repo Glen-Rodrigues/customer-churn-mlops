@@ -14,6 +14,8 @@ split:
 artifacts:
   preprocessor_path: "artifacts/preprocessor.joblib"
   scaler_path: "artifacts/scaler.joblib"
+  feature_columns_path: "artifacts/feature_columns.joblib"
+  champion_model_dir: "artifacts/champion_model"
 
 # Feature classification for encoding (Phase 2)
 # These lists drive the encoding functions in data_preprocessing.py -
