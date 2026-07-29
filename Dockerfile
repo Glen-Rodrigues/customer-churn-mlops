@@ -40,16 +40,26 @@ COPY src/ ./src/
 COPY api/ ./api/
 COPY configs/ ./configs/
 
-# mlruns/, mlflow.db, and artifacts/*.joblib are all gitignored (see
-# project_status.md Phase 6 design decision) - COPY pulls them from
-# local disk at build time regardless of .gitignore, since git and
-# docker build don't share that rule. Deliberate tradeoff: this
-# Dockerfile can only build on a machine that already has these three
-# present (i.e. one that's already run train.py locally) - a DVC
+# artifacts/ (encoder, scaler, feature_columns, and the exported
+# champion_model/ folder) is gitignored (see project_status.md Phase 6
+# design decision) - COPY pulls it from local disk at build time
+# regardless of .gitignore, since git and docker build don't share
+# that rule. Deliberate tradeoff: this Dockerfile can only build on a
+# machine that already has artifacts/ populated (i.e. one that's
+# already run train.py AND export_champion_model.py locally) - a DVC
 # remote + `dvc pull` step is the more "correct" long-term fix, parked
 # for later (see project_status.md).
-COPY mlruns/ ./mlruns/
-COPY mlflow.db ./mlflow.db
+#
+# mlruns/ and mlflow.db are deliberately NOT copied in anymore. Early
+# in Phase 6 the API loaded the champion model via MLflow's tracking
+# store (runs:/{run_id}/model), which needed both files at runtime -
+# that's why they were here originally. Since the Option B fix
+# (export_champion_model.py + load_champion_model_from_export() in
+# predict.py), the Docker/API path loads the model as plain files from
+# artifacts/champion_model/ and never touches mlruns/ or mlflow.db at
+# all. Copying them in was harmless-but-wasted image size and build
+# time - evaluate.py still uses them, but evaluate.py only ever runs
+# locally, never inside this container.
 COPY artifacts/ ./artifacts/
 
 # Documents which port the container listens on. Does NOT actually
