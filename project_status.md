@@ -1,13 +1,12 @@
 # Customer Churn MLOps — Project Status
 
-Last updated: [Phase 6 in progress - api/app.py built and verified
-end-to-end (unchanged from before). Dockerfile now WRITTEN and fully
-commented, but NOT yet built or run - blocked on Docker Desktop
-installation on the local Windows machine (also runs VMware
-Workstation; confirmed modern VMware + WSL2/Hyper-V coexistence is
-supported, proceeding with install). `docker build` has not been
-executed yet - that's the next step once Docker install is verified
-working.]
+Last updated: [Phase 6 COMPLETE - Docker image builds, container runs
+cleanly end-to-end, /health and /predict both verified against the
+real champion model with exact parity to the native uvicorn run
+(0.9183 / "Yes" on the same high-risk test profile). Two real bugs
+found and fixed along the way (see Phase 6 section below). Next up:
+Phase 7 (Evidently monitoring / optional Streamlit dashboard) or
+Phase 8 (README/report polish) - not yet decided which first.]
 
 ## Completed
 
@@ -301,7 +300,7 @@ chains them, `if __name__ == "__main__": main()`).
   batch-scoring capability for near-zero extra cost since nothing about
   the core logic needed to change to support both.
 
-## Phase 6 — FastAPI + Docker — IN PROGRESS (api/app.py done; Dockerfile written + commented, not yet built/run)
+## Phase 6 — FastAPI + Docker — COMPLETE
 
 ### api/app.py — built and verified end-to-end against the real champion model
 Wraps predict.py's existing predict_single() in a REST API - deliberately
@@ -378,7 +377,7 @@ artifacts:
   proving strict validation actually blocks bad input rather than
   silently mispredicting.
 
-### Dockerfile — written and fully commented (not yet built/run)
+### Dockerfile — written and fully commented
 Built part-by-part with Claude teaching each concept (image vs.
 container, layers, caching) before writing the corresponding lines.
 
@@ -413,31 +412,73 @@ container, layers, caching) before writing the corresponding lines.
   accept connections from inside the container itself, causing every
   external request to silently time out.
 
-### Blocked on: Docker Desktop installation (local machine)
-- Attempted `docker build -t churn-api .` from repo root - failed,
-  Docker not yet installed on the Windows machine
-  (`CommandNotFoundException` in PowerShell).
-- Local machine also runs VMware Workstation. Checked compatibility:
-  modern VMware Workstation (15.5.5+) supports the Windows Hypervisor
-  Platform and coexists with WSL2/Hyper-V (which Docker Desktop uses
-  on Windows) - some performance overhead possible, but should not be
-  a blocker. Proceeding with Docker Desktop install.
-- Confirmed target architecture: **amd64** (VMware Workstation itself
-  doesn't run on ARM64 Windows, which was enough to confirm without
-  needing to check System Settings directly).
-- **Next steps once Docker Desktop is installed + verified**
-  (`docker --version` and `docker run hello-world` both succeed):
-  run `docker build -t churn-api .` from repo root for the first real
-  build attempt.
+### Docker Desktop installed; `docker build` + `docker run` — verified end-to-end
 
-### Not yet done
-- Docker Desktop installation + verification on local machine (in
-  progress - see "Blocked on" above)
-- `docker build` - first real build attempt (Dockerfile is ready, just
-  never actually run yet)
-- Docker container run + `/health` and `/predict` verification against
-  the real champion model (parity check with Phase 6's native
-  uvicorn run, which returned churn_probability: 0.9183)
+Docker Desktop install completed successfully (coexists fine with the
+local VMware Workstation setup, as anticipated). `docker build -t
+churn-api .` succeeded on the first real attempt using the Dockerfile
+from the section above.
+
+`docker run -p 8000:8000 churn-api` initially failed on two stacked
+bugs, both now fixed:
+
+**Bug 1 — `data/processed/train.csv` never made it into the image.**
+`predict.py`'s `load_artifacts()` originally re-derived
+`feature_columns` (the canonical raw column order used to reindex
+incoming customer data) by reading `data/processed/train.csv` at
+startup. That directory was never `COPY`'d into the Dockerfile (only
+`mlruns/`, `mlflow.db`, and `artifacts/` were), so the container
+crashed at FastAPI's `lifespan()` startup with `FileNotFoundError`
+before `/health` or `/predict` were even reachable.
+**Fix:** `train.py`'s `main()` now saves `feature_columns` as its own
+small `artifacts/feature_columns.joblib` file, right alongside the
+encoder/scaler - same "persist what was already computed, don't
+silently re-derive it downstream" principle already used for those.
+`predict.py`'s `load_artifacts()` now `joblib.load()`s this instead of
+reading `train.csv`. No Dockerfile change needed - `artifacts/` was
+already being copied in. (One-time backfill of the artifact for the
+already-trained champion was done via a throwaway
+`generate_feature_columns.py` script, since re-running full training
+would have recreated the duplicate-MLflow-runs issue from Phase 4.)
+
+**Bug 2 — MLflow artifact store held an absolute Windows host path.**
+`evaluate.py`'s `load_champion_model()` resolves
+`runs:/{run_id}/model` through `mlflow.db`, which records the artifact
+location as an ABSOLUTE path from the machine `train.py` was run on
+(e.g. `W:/Projects/customer-churn-mlops/mlruns/...`). That path
+doesn't exist inside the Linux container, so `mlflow.lightgbm.load_model()`
+failed with `MlflowException: No such artifact: 'MLmodel'` at startup.
+**Fix (Option B - bypass the tracking store for Docker/API loading):**
+new `export_champion_model.py` script loads the champion once via
+`runs:/{run_id}/model` (works fine locally, where the absolute path is
+still valid) and re-saves it as a self-contained folder
+(`artifacts/champion_model/`, via `mlflow.lightgbm.save_model()`) with
+no tracking-store dependency at all. `predict.py` has a new
+`load_champion_model_from_export()` that loads directly from this
+folder and is what `load_artifacts()` now calls.
+Deliberately kept as a *separate* function from `evaluate.py`'s
+`load_champion_model()` rather than replacing it - `evaluate.py`'s
+local workflow (SHAP, confusion matrix, etc.) still loads via
+`runs:/{run_id}/model` and stays tied to the exact tracked run;
+`predict.py` (used by both the CLI and the Docker/FastAPI path) only
+needs a working, portable copy of that same model. `export_champion_model.py`
+must be rerun (before `docker build`) any time `champion_run_id`
+changes - it's a permanent, reusable tool, not a one-off script, and is
+tracked in git going forward.
+`config.yaml` gained one new key: `artifacts.champion_model_dir:
+"artifacts/champion_model"`.
+
+### Verified end-to-end inside Docker (real champion model)
+- `docker build -t churn-api .` - succeeds.
+- `docker run -p 8000:8000 churn-api` - starts cleanly:
+  `Application startup complete`, no errors.
+- `GET /health` -> `{"status":"ok"}` (200 OK).
+- `POST /predict` with the same high-risk test profile used in Phase 6's
+  native uvicorn run (new customer, month-to-month, fiber, electronic
+  check, no add-ons) -> `churn_probability: 0.9183, churn_prediction:
+  "Yes"` - an EXACT match to the native run, confirming the model,
+  encoder, scaler, and feature-column order all load and behave
+  identically inside the container as they do locally.
 
 ## Phase 9 — Reproducibility + CI — COMPLETE
 
@@ -589,9 +630,6 @@ behavior again, or if this pattern is reused elsewhere (e.g. a future
 predict.py explainability feature).
 
 ## Not yet started (later phases)
-- Phase 6: Dockerfile is written and commented (see Phase 6 section
-  above) but not yet built or run - waiting on Docker Desktop install
-  on the local machine, then `docker build` + container verification
 - Phase 7: Evidently monitoring, optional Streamlit dashboard. If automated
   retraining + auto-selection of the champion (by e.g. highest ROC-AUC) is
   introduced here, note that `load_champion_model()` in evaluate.py
