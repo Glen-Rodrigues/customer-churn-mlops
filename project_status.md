@@ -1,12 +1,9 @@
 # Customer Churn MLOps — Project Status
 
-Last updated: [Phase 6 COMPLETE - Docker image builds, container runs
-cleanly end-to-end, /health and /predict both verified against the
-real champion model with exact parity to the native uvicorn run
-(0.9183 / "Yes" on the same high-risk test profile). Two real bugs
-found and fixed along the way (see Phase 6 section below). Next up:
-Phase 7 (Evidently monitoring / optional Streamlit dashboard) or
-Phase 8 (README/report polish) - not yet decided which first.]
+Last updated: [Phase 6 COMPLETE. Phase 7 (Evidently monitoring) IN
+PROGRESS - src/monitoring.py fully built, tested, and verified
+end-to-end (drift detection + two simulated scenarios). Streamlit
+dashboard (monitoring/dashboard.py) not yet built - next step.]
 
 ## Completed
 
@@ -480,6 +477,103 @@ tracked in git going forward.
   encoder, scaler, and feature-column order all load and behave
   identically inside the container as they do locally.
 
+## Phase 7 — Monitoring (Evidently) — IN PROGRESS
+
+### src/monitoring.py — built and verified end-to-end (data drift detection)
+- `load_config()`, `load_reference_data()` (loads train.csv, drops
+  target column), `load_current_data()` (loads a comparison CSV,
+  defaults to test.csv, drops target column if present)
+- `generate_drift_report()` — runs Evidently's `DataDriftPreset`
+  comparing reference vs current data, returns the raw Evidently
+  Snapshot result
+- `save_report_html()` — saves the full interactive Evidently report
+- `summarize_drift()` — parses the Evidently result into an "at a
+  glance" table (column, test used, value, drifted true/false).
+  **Bug found and fixed:** Evidently automatically switches which
+  statistical test it runs per column based on sample size - small
+  samples get p-value tests (K-S, chi-square, Z-test, where drift =
+  value BELOW threshold), larger samples (ours: ~5,600 train rows)
+  get distance-based tests (Jensen-Shannon distance, Wasserstein
+  distance, where drift = value ABOVE threshold). An early version of
+  `summarize_drift()` only implemented the p-value direction, so on
+  real data every distance value was incorrectly flagged `drifted:
+  True` even though the overall `DriftedColumnsCount` metric (computed
+  correctly by Evidently internally) said 0% drift. Fixed by checking
+  for `'p_value' in method` and flipping the comparison direction
+  accordingly. Verified: per-column table now agrees with the overall
+  count in both the baseline and simulated-drift runs.
+- `apply_price_increase()` — simulates a price hike: scales
+  MonthlyCharges and TotalCharges both by the same factor (default
+  +15%). Documented simplification: scaling TotalCharges (a
+  historical, already-billed figure) stands in for "newer customers
+  who signed up after the increase," not a claim that existing
+  customers' past bills changed retroactively.
+- `apply_segment_shift()` — simulates a shift toward a riskier
+  customer mix: randomly selects a fraction of rows (tuned to 35% -
+  see below) and pushes Contract -> Month-to-month (0, ordinal-
+  encoded), InternetService -> "Fiber optic", PaymentMethod ->
+  "Electronic check" (the three strongest churn predictors from Phase
+  1 EDA). Uses `np.random.default_rng(random_state)` for reproducible
+  sampling.
+- **shift_fraction tuning:** started at 15% (matching the price
+  increase's magnitude for symmetry), but this only produced partial
+  drift (Contract/InternetService/PaymentMethod elevated at 0.05-0.08
+  vs baseline's 0.003-0.03, but not clearing the 0.1 threshold).
+  Tested 0.15/0.25/0.35/0.45/0.55 against representative category
+  proportions - 0.25 still left Contract just under threshold (0.091),
+  0.35 cleared all three comfortably (0.12-0.17) without being an
+  implausibly large single-quarter shift. Set as the value passed in
+  `main()`.
+- `main()` — generates and saves TWO reports against the same
+  reference (train.csv):
+  1. `drift_report_baseline.html` - test.csv unmodified. **Verified:**
+     0/19 columns drifted, all values well under threshold (highest:
+     tenure at 0.0316) - confirms no false signal on genuinely
+     unchanged data.
+  2. `drift_report_simulated.html` - test.csv run through both
+     `apply_price_increase()` and `apply_segment_shift(shift_fraction=
+     0.35)`. **Verified:** exactly the 5 targeted columns
+     (MonthlyCharges 0.30, PaymentMethod 0.17, InternetService 0.14,
+     TotalCharges 0.13, Contract 0.13) flagged `drifted: True`; all 14
+     untouched columns stayed `False` - confirms the perturbation and
+     detection logic both work correctly together, isolated to
+     exactly the columns that were actually changed.
+
+### configs/config.yaml — new key
+- Added `monitoring.reports_dir: "monitoring/reports"`.
+
+### Design decisions made this phase (so far)
+- **Dropped the target column (Churn) before drift comparison** -
+  monitoring here checks whether INPUT features have shifted, not the
+  label itself; label/target drift is a related but different concept,
+  noted as a possible future extension, not built now.
+- **Reference = train.csv, not a rolling window** - keeps the
+  reference fixed to exactly what the champion model was trained on,
+  consistent with how `champion_run_id` is pinned rather than
+  auto-updated (Phase 4 principle applied here too).
+- **Perturbation functions live in monitoring.py, not a separate
+  script** - they're monitoring-simulation concerns, not part of the
+  core training/prediction pipeline, so they sit alongside
+  `generate_drift_report()` rather than in `src/predict.py` or a new
+  top-level file.
+- **`monitoring/reports/` gitignored, but two reports copied to `docs/`**
+  - same pattern as `docs/plots/` (Phase 9.5): the reports folder itself
+    is fully regenerable (`python src/monitoring.py` only needs
+    train.csv/test.csv, both DVC-tracked) so there's no reason to track
+    ~8MB of generated HTML in git. But `drift_report_baseline.html` and
+    `drift_report_simulated.html` are good portfolio evidence a
+    recruiter could open straight from GitHub, so they're manually
+    copied into `docs/` (not gitignored) for README embedding in
+    Phase 8. Same staleness caveat as docs/plots/ - if the champion
+    model or shift_fraction ever changes, these need manual re-copy +
+    recommit or they'll silently go stale.
+
+### Not yet done (Phase 7 continues)
+- Streamlit dashboard (`monitoring/dashboard.py`) - not yet built.
+  Will let the user pick reference vs baseline/simulated/uploaded
+  current data and view the drift summary + full report interactively,
+  reusing monitoring.py's functions rather than duplicating logic.
+
 ## Phase 9 — Reproducibility + CI — COMPLETE
 
 ### tests/test_preprocessing.py — now has real content (closes Phase 5 leftover)
@@ -630,7 +724,7 @@ behavior again, or if this pattern is reused elsewhere (e.g. a future
 predict.py explainability feature).
 
 ## Not yet started (later phases)
-- Phase 7: Evidently monitoring, optional Streamlit dashboard. If automated
+- Phase 7: IN PROGRESS - see dedicated section above (src/monitoring.py done, Streamlit dashboard pending). If automated
   retraining + auto-selection of the champion (by e.g. highest ROC-AUC) is
   introduced here, note that `load_champion_model()` in evaluate.py
   currently hardcodes `mlflow.lightgbm.load_model()`, which only works
