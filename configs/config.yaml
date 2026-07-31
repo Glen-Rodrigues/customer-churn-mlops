@@ -52,3 +52,6 @@ mlflow:
   tracking_uri: "sqlite:///mlflow.db"
   experiment_name: "churn_prediction"
   champion_run_id: "d7d6aea0f5bc4289a37aad468b751428"
+
+monitoring:
+  reports_dir: "monitoring/reports"
