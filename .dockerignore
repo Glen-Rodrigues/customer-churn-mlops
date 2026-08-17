@@ -1,0 +1,77 @@
+# =========================
+# Version Control
+# =========================
+.git/
+.gitignore
+
+# =========================
+# Python
+# =========================
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# =========================
+# Testing & CI
+# =========================
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+.github/
+
+# =========================
+# Data (not needed at runtime - model is pre-exported)
+# =========================
+data/
+
+# =========================
+# MLflow tracking store (runtime uses exported champion model, not tracking store)
+# =========================
+mlruns/
+mlflow.db
+
+# =========================
+# Notebooks & Docs
+# =========================
+notebooks/
+docs/
+
+# =========================
+# DVC
+# =========================
+.dvc/
+.dvcignore
+
+# =========================
+# Monitoring (reports are generated artifacts, not needed for the API)
+# =========================
+monitoring/
+
+# =========================
+# IDE & OS
+# =========================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# =========================
+# Scripts (utility scripts, not needed at runtime)
+# =========================
+scripts/
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Project docs
+# =========================
+README.md
+project_status.md
+LICENSE
