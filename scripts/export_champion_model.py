@@ -15,16 +15,6 @@ folder (via mlflow.lightgbm.save_model) removes that dependency
 entirely - predict.py can load it as plain files, no tracking store
 or run_id lookup required.
 
-NOTE: this script used to also export feature_columns to a JSON file.
-That's been removed - train.py now saves feature_columns.joblib
-automatically on every training run (same principle as the encoder/
-scaler), so a second, separate export step for it was redundant and
-risked overwriting the correct joblib file with a stale JSON one if
-this script were ever rerun without also touching feature_columns.
-There is one orphaned leftover from the old version of this script:
-artifacts/feature_columns.json. It's unused now (predict.py loads
-feature_columns.joblib) - safe to delete.
-
 Run this locally (not in Docker) whenever config.yaml's
 champion_run_id changes - e.g. after retraining and picking a new
 champion. Must run BEFORE `docker build`, since the Dockerfile's
