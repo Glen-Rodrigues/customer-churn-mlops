@@ -1,9 +1,10 @@
 # Customer Churn MLOps — Project Status
 
-Last updated: [Phase 7 COMPLETE. src/monitoring.py fully built and
-verified end-to-end (drift detection + two simulated scenarios).
-Streamlit dashboard (monitoring/dashboard.py) built and working.
-Phase 8 (README/report polish) next.]
+Last updated: [Phase 8 COMPLETE. All phases done. README fully
+overhauled with pipeline diagram, full metrics table, evaluation plots,
+setup/usage instructions, API examples, Docker, testing, tech stack,
+and key design decisions. project_status.md kept tracked on GitHub
+deliberately — see Phase 8 notes.]
 
 ## Completed
 
@@ -769,6 +770,59 @@ cleaning up before Phase 8 (README):
   `monitoring/reports/.gitkeep` and a matching `!monitoring/reports/.gitkeep`
   exception to `.gitignore`, matching the exact pattern the other three
   directories already use.
+
+## Phase 8 — README + Documentation Polish — COMPLETE
+
+The 39-line skeleton README was replaced with a full portfolio-quality
+document. Content drawn entirely from this status doc and the code
+itself — no new information, just distilled and presented for an
+external reader seeing the project for the first time.
+
+### README.md — overhauled end-to-end
+- **Pipeline overview diagram** — ASCII flow from raw CSV through
+  preprocessing, training, MLflow tracking, champion selection, export,
+  API, and monitoring dashboard.
+- **Results table** — full 8-run metrics comparison (LR/XGB/LGBM,
+  baseline and tuned), champion highlighted, selection rationale
+  included inline. ROC-AUC noted explicitly as NOT the selection
+  criterion (matching the Phase 3/4 multi-metric reasoning).
+- **Evaluation plots embedded** — `confusion_matrix.png`, `roc_curve.png`,
+  and `shap_summary.png` from `docs/plots/` (the tracked copies added
+  in Phase 9.5 specifically for this purpose). SHAP insight note
+  cross-references EDA findings.
+- **Project structure** — annotated directory tree with one-line
+  purpose per folder/file.
+- **Getting started** — 7-step setup guide: clone → venv → data (DVC
+  pull or manual) → train → evaluate → export champion → API → dashboard.
+- **API usage** — health check + full `curl` example using the first
+  row of the Telco dataset as a realistic test case, sample JSON
+  response, note on Literal validation behaviour.
+- **Docker** — build/run commands, note on what `.dockerignore` keeps
+  out of the image.
+- **Testing** — pytest command, summary of what's covered.
+- **Tech stack table** — organized by layer (data versioning, EDA,
+  preprocessing, training, tracking, explainability, monitoring, API,
+  dashboard, containerisation, CI, testing).
+- **Key design decisions** — the 5 non-obvious choices: config-driven
+  design, artifact persistence over re-derivation, column-order safety,
+  champion export for Docker portability, multi-metric champion selection.
+
+### dashboard.py — full interactive report embed added
+- A `REPORT_FILENAMES` dict maps each sidebar dropdown option to its
+  pre-saved Evidently HTML report. The file is read and rendered via
+  `st.components.v1.html()` inside an `st.expander`, so the full
+  Evidently report (column distributions, drift scores, statistical
+  test details) is accessible directly in the dashboard without
+  leaving to a browser tab. Graceful `st.warning` fallback if report
+  files haven't been generated yet.
+
+### project_status.md — intentionally tracked on GitHub
+Kept as a public, committed file rather than gitignored. For a portfolio
+project, this document is an asset: it shows the reasoning behind every
+design decision, root-cause analysis for every bug, and the full
+engineering journal from Phase 1 to completion. The README shows *what*
+was built; this file shows *how* and *why* — which is what distinguishes
+a strong portfolio project from a code dump.
 
 ## Open TODOs (flagged, not yet fixed - relevant for later phases)
 
