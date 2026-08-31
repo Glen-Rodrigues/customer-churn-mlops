@@ -18,17 +18,11 @@ current one, and flags any column whose p-value falls below 0.05.
 """
 
 import os
-import yaml
 import pandas as pd
 import numpy as np
 from evidently import Report, Dataset
 from evidently.presets import DataDriftPreset
-
-
-def load_config(config_path="configs/config.yaml"):
-    """Load settings (paths) from the YAML config file."""
-    with open(config_path) as f:
-        return yaml.safe_load(f)
+from data_preprocessing import load_config
 
 
 def load_reference_data(config):
@@ -124,7 +118,7 @@ def summarize_drift(result):
     return n_drifted, share_drifted, summary_df
 
 
-def apply_price_increase(df, pct_increase=0.15, random_state=42):
+def apply_price_increase(df, pct_increase=0.15):
     """
     Simulate a price increase: bump MonthlyCharges by pct_increase
     (default 15%) and scale TotalCharges by the same factor, so the two
