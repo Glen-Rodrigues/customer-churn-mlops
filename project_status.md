@@ -581,6 +581,17 @@ tracked in git going forward.
   shown as an interactive st.dataframe.
 - Same "translation layer, no new logic" principle used for api/app.py
   in Phase 6.
+- **Full interactive Evidently report embedded directly in the UI.**
+  A `REPORT_FILENAMES` dict maps each dropdown selection to its
+  pre-saved HTML file (`drift_report_baseline.html` /
+  `drift_report_simulated.html`). The HTML is read from disk and
+  rendered in an iframe via `st.components.v1.html()` — Evidently
+  reports are fully self-contained (all CSS/JS inlined), so no
+  external assets are needed. Wrapped in an `st.expander` so it
+  doesn't dominate the page on load. If the file doesn't exist
+  (fresh clone before running monitoring.py), an `st.warning`
+  tells the user to run `python src/monitoring.py` first rather
+  than crashing silently.
 
 ## Phase 9 — Reproducibility + CI — COMPLETE
 
