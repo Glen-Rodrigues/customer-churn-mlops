@@ -257,9 +257,11 @@ def main():
     and reloaded at inference time rather than recomputed
 
     Champion model (selected after comparing all 8 runs): LightGBM
-    Tuned - best ROC-AUC and F1 of all runs, with recall close to the
-    single highest recall achieved (LR balanced). See run #8's params
-    below (lgbm_tuned_params) for the exact winning configuration.
+    Tuned - best F1 of all runs (0.648), with recall near the single
+    highest achieved (LR balanced, 0.823) while keeping better
+    precision/accuracy. Note: ROC-AUC is NOT the selection criterion -
+    both LR variants score higher (~0.862 vs 0.857). See run #8's
+    params below (lgbm_tuned_params) for the exact winning configuration.
     """
     config = load_config()
 
