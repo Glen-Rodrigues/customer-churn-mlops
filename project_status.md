@@ -1,9 +1,9 @@
 # Customer Churn MLOps — Project Status
 
-Last updated: [Phase 6 COMPLETE. Phase 7 (Evidently monitoring) IN
-PROGRESS - src/monitoring.py fully built, tested, and verified
-end-to-end (drift detection + two simulated scenarios). Streamlit
-dashboard (monitoring/dashboard.py) not yet built - next step.]
+Last updated: [Phase 7 COMPLETE. src/monitoring.py fully built and
+verified end-to-end (drift detection + two simulated scenarios).
+Streamlit dashboard (monitoring/dashboard.py) built and working.
+Phase 8 (README/report polish) next.]
 
 ## Completed
 
@@ -568,11 +568,19 @@ tracked in git going forward.
     model or shift_fraction ever changes, these need manual re-copy +
     recommit or they'll silently go stale.
 
-### Not yet done (Phase 7 continues)
-- Streamlit dashboard (`monitoring/dashboard.py`) - not yet built.
-  Will let the user pick reference vs baseline/simulated/uploaded
-  current data and view the drift summary + full report interactively,
-  reusing monitoring.py's functions rather than duplicating logic.
+### Streamlit dashboard (monitoring/dashboard.py) — COMPLETE
+- Built as a pure UI layer on top of monitoring.py, importing and
+  reusing load_config, load_reference_data, load_current_data,
+  generate_drift_report, summarize_drift, apply_price_increase, and
+  apply_segment_shift — no drift logic duplicated here.
+- Sidebar selectbox lets user switch between Baseline (test.csv
+  unmodified) and Simulated drift (price increase + segment shift).
+- Results cached per source selection via @st.cache_data so switching
+  back reuses computed results without re-running drift detection.
+- Headline metrics shown via st.metric cards; per-column drift detail
+  shown as an interactive st.dataframe.
+- Same "translation layer, no new logic" principle used for api/app.py
+  in Phase 6.
 
 ## Phase 9 — Reproducibility + CI — COMPLETE
 
@@ -677,6 +685,79 @@ real, previously-undocumented issues, all now resolved:
   manually refreshed and recommitted, or it will silently go stale
   relative to the live model. Revisit only if this drift becomes an
   actual problem worth automating around.
+
+## Phase 9.6 — Second Cleanup Pass + Hygiene Fixes
+
+After a full re-read of the project against the review notes, five
+previously-undocumented issues were found and fixed. Same pattern as
+Phase 9.5: nothing that broke anything in practice, but all worth
+cleaning up before Phase 8 (README):
+
+- **No `.dockerignore` existed.** Docker was sending the entire
+  directory tree as the build context on every `docker build` — including
+  `.git/`, `.venv/`, `data/`, `mlruns/`, `mlflow.db`, `notebooks/`,
+  `tests/`, and `.dvc/cache/`. The Dockerfile's explicit per-folder
+  `COPY` lines already kept those out of the image, but Docker still
+  transferred the full tree to the daemon before deciding what to COPY,
+  making builds unnecessarily slow (especially after any data change).
+  **Fixed** by adding `.dockerignore` at the repo root excluding
+  everything the running API container doesn't need. The four folders
+  the Dockerfile actually COPYs (`src/`, `api/`, `configs/`,
+  `artifacts/`) are not excluded, so build behavior is unchanged —
+  only the build-context transfer is now minimal.
+
+- **`scripts/export_champion_model.py` had a stale NOTE in its
+  docstring** referencing `artifacts/feature_columns.json` as "an
+  orphaned leftover — safe to delete." That file no longer existed
+  in the repo (it was either already cleaned up or was gitignored),
+  so the comment was misleading to anyone reading the script cold.
+  **Fixed** by removing the stale NOTE block entirely; the docstring
+  now flows from the "why this exists" explanation directly into the
+  usage instructions without the confusing dead-end reference.
+
+- **`train.py`'s `main()` docstring incorrectly described the champion
+  model selection criterion.** It read "best ROC-AUC and F1 of all
+  runs" — factually wrong: both LR variants achieve higher ROC-AUC
+  (~0.862 vs LightGBM Tuned's 0.857), as explicitly documented in the
+  Phase 3 table and the multi-metric selection reasoning in Phase 4.
+  The champion was picked for best F1 (0.648) with recall near the
+  highest achieved, not for ROC-AUC. **Fixed** by rewriting those two
+  lines to match the actual selection reasoning documented everywhere
+  else in this file, and adding an explicit note that ROC-AUC was NOT
+  the criterion.
+
+- **`monitoring.py` reimplemented `load_config()` instead of importing
+  it,** and imported `yaml` directly even though `data_preprocessing.py`
+  already exports an identical function (same signature, same body) that
+  every other module in `src/` already imports. Root cause: monitoring.py
+  was written as a standalone script first, before the convention of
+  importing shared utilities from `data_preprocessing` was fully
+  established. **Fixed** by replacing the local `load_config()` definition
+  and the `import yaml` line with a single
+  `from data_preprocessing import load_config`, matching the pattern
+  used by `train.py`, `evaluate.py`, and `predict.py`. Zero behavior
+  change — the function body was identical.
+  **Also fixed in the same pass:** `apply_price_increase()` accepted a
+  `random_state=42` parameter it never used. The function is fully
+  deterministic (it just multiplies two columns by a constant) — no
+  randomness, no sampling. The parameter was an artifact of early
+  drafting when the function signature was copied from
+  `apply_segment_shift()`, which does use `random_state` for
+  reproducible sampling. **Fixed** by removing the dead parameter.
+  Confirmed no caller passed it (both `monitoring.py`'s `main()` and
+  `dashboard.py` call `apply_price_increase(df)` with no extra args).
+
+- **`monitoring/reports/` had no `.gitkeep` file**, breaking consistency
+  with every other generated-output directory in the repo (`data/raw/`,
+  `data/processed/`, `artifacts/` all follow the `.gitkeep` +
+  `!dir/.gitkeep` gitignore pattern so the directory survives a bare
+  `git clone`). Without a `.gitkeep`, a fresh clone followed by
+  `python src/monitoring.py` would technically still work — `save_report_html()`
+  calls `os.makedirs(..., exist_ok=True)` before writing — but the
+  inconsistency was worth closing. **Fixed** by adding
+  `monitoring/reports/.gitkeep` and a matching `!monitoring/reports/.gitkeep`
+  exception to `.gitignore`, matching the exact pattern the other three
+  directories already use.
 
 ## Open TODOs (flagged, not yet fixed - relevant for later phases)
 
