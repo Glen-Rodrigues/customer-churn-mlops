@@ -111,3 +111,29 @@ col2.metric("Share drifted", f"{share_drifted:.0%}")
 
 st.subheader("Per-column drift detail")
 st.dataframe(summary_df, use_container_width=True)
+
+# --- Full Evidently HTML report ---
+# Maps the dropdown selection to the matching pre-saved report file.
+# These are the exact files monitoring.py's main() already generates -
+# we're just reading and displaying them, not regenerating anything.
+REPORT_FILENAMES = {
+    "Baseline (test.csv, unmodified)": "drift_report_baseline.html",
+    "Simulated drift (price increase + segment shift)": "drift_report_simulated.html",
+}
+
+report_path = os.path.join(config['monitoring']['reports_dir'], REPORT_FILENAMES[source])
+
+st.subheader("Full interactive report")
+with st.expander("Show full Evidently report (distributions, drift scores per column)"):
+    if os.path.exists(report_path):
+        with open(report_path, 'r', encoding='utf-8') as f:
+            report_html = f.read()
+        # components.v1.html renders raw HTML in an iframe. Evidently's
+        # reports are fully self-contained (CSS/JS inlined), so no
+        # external assets are needed for this to render correctly.
+        st.components.v1.html(report_html, height=800, scrolling=True)
+    else:
+        st.warning(
+            f"Report file not found at {report_path}. "
+            f"Run `python src/monitoring.py` first to generate it."
+        )
