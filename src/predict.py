@@ -13,6 +13,7 @@ loading persisted artifacts isn't just a nice-to-have here, it's the
 only correct option.
 """
 
+import os
 import pandas as pd
 import mlflow
 import mlflow.lightgbm
@@ -179,20 +180,49 @@ def main():
     suffix), so predict.py is usable both as an importable module
     (predict_single/predict_from_csv, e.g. from a future FastAPI
     endpoint) and as a standalone script for one-off batch scoring.
+
+    M7 FIX: added explicit guards before touching any data or model.
+    Previously, a missing file produced a raw FileNotFoundError
+    traceback from deep inside pandas/joblib, giving the caller no
+    hint about what went wrong or how to fix it. Now each failure
+    mode prints one clear, actionable message and exits cleanly.
     """
     import sys
 
     if len(sys.argv) != 2:
-        print("Usage: python src/predict.py path/to/customers.csv")
-        return
+        print("Usage: python src/predict.py path/to/customers.csv", file=sys.stderr)
+        sys.exit(1)
 
     csv_path = sys.argv[1]
+
+    # Guard 1: check the file exists before we even load the model.
+    # Failing fast here means the user knows immediately whether the
+    # problem is the path, not something buried inside prediction logic.
+    if not os.path.isfile(csv_path):
+        print(f"Error: CSV file not found: '{csv_path}'", file=sys.stderr)
+        sys.exit(1)
+
     output_path = csv_path.replace(".csv", "_predictions.csv")
 
-    config = load_config()
-    model, encoder, scaler, feature_columns = load_artifacts(config)
+    # Guard 2: load artifacts and run predictions, with a catch for
+    # the two most common runtime failures:
+    #   - ValueError: preprocess_customer_data() found a missing column.
+    #   - pandas ParserError or any other exception: malformed CSV or
+    #     an unexpected model error.
+    # In both cases we print one readable line instead of a traceback.
+    try:
+        config = load_config()
+        model, encoder, scaler, feature_columns = load_artifacts(config)
+        results = predict_from_csv(
+            csv_path, model, encoder, scaler, feature_columns, config, output_path
+        )
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: prediction failed — {e}", file=sys.stderr)
+        sys.exit(1)
 
-    results = predict_from_csv(csv_path, model, encoder, scaler, feature_columns, config, output_path)
     print(f"\nScored {len(results)} customers.")
     print(results[["churn_probability", "churn_prediction"]].head())
 
