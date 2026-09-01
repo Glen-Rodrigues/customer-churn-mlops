@@ -180,7 +180,7 @@ streamlit run monitoring/dashboard.py
 
 ```bash
 curl http://localhost:8000/health
-# {"status": "ok"}
+# {"status": "ok", "model_loaded": true}
 ```
 
 ### Predict churn
@@ -215,7 +215,7 @@ curl -X POST http://localhost:8000/predict \
 ```json
 {
   "churn_probability": 0.73,
-  "churn_prediction": "Churn"
+  "churn_prediction": "Yes"
 }
 ```
 
@@ -263,6 +263,16 @@ Tests cover `data_preprocessing.py` pure functions and the `predict.py` preproce
 | Containerisation | Docker |
 | CI | GitHub Actions |
 | Testing | pytest |
+
+---
+
+## Known Limitations / Future Work
+
+- **No DVC remote configured** — `.dvc/config` is intentionally empty. The raw data can be re-downloaded from Kaggle and the processed data regenerated locally; artifact files are copied directly into the Docker image at build time (`COPY artifacts/`). Setting up a real remote (S3, GCS) adds infrastructure cost that isn't warranted for a local portfolio project. Documented in `project_status.md` Phase 6 as a deliberate tradeoff.
+
+- **CI does not run pipeline or API smoke tests** — the GitHub Actions workflow installs dependencies and runs `pytest tests/`, which covers preprocessing pure functions and the predict.py input pipeline. It does not run `train.py`, `evaluate.py`, or any API endpoint tests. Full pipeline tests would require either real data or mocked artifacts in CI — meaningful effort with no strong payoff for a project that isn't deployed to staging.
+
+- **`requirements.txt` is a full `pip freeze` dump** — 271 packages, including transitive dependencies and development-only tools not needed at runtime. A trimmed production requirements file and a separate dev requirements file would significantly reduce Docker image size. Noted as a known inefficiency; splitting it is a straightforward improvement if the project grows.
 
 ---
 
