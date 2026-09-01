@@ -9,6 +9,9 @@ already exists and is already tested.
 
 import sys
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 """
 api/app.py lives in api/, but load_artifacts, predict_single, etc. live
@@ -111,14 +114,29 @@ async def lifespan(app: FastAPI):
     that cost again, making the API needlessly slow and hammering
     disk/MLflow for no reason - the model itself never changes
     between requests, so there's nothing to gain by reloading it.
+
+    C4 FIX: wrapped in try/except so a missing artifact file produces
+    a clear, human-readable startup error instead of a raw Python
+    traceback that buries the actual problem (e.g. "which file is
+    missing?") inside 20 lines of stack frames.
     """
-    config = load_config(CONFIG_PATH)
-    model, encoder, scaler, feature_columns = load_artifacts(config)
+    try:
+        config = load_config(CONFIG_PATH)
+        model, encoder, scaler, feature_columns = load_artifacts(config)
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            f"Startup failed — required artifact not found: {e}. "
+            "Run train.py then export_champion_model.py before starting the server."
+        ) from e
+    except Exception as e:
+        raise RuntimeError(f"Startup failed — could not load ML artifacts: {e}") from e
+
     ml_artifacts["model"] = model
     ml_artifacts["encoder"] = encoder
     ml_artifacts["scaler"] = scaler
     ml_artifacts["feature_columns"] = feature_columns
     ml_artifacts["config"] = config
+    logger.info("ML artifacts loaded successfully. API is ready.")
 
     yield  # the API runs and serves requests here
 
@@ -140,7 +158,18 @@ server started correctly before testing the real endpoint.
 """
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    """
+    M6 FIX: check that the model actually loaded before saying "ok".
+    Previously this returned 200 unconditionally — even if startup
+    had silently failed and ml_artifacts was empty. A Docker
+    healthcheck or load balancer would then mark the container
+    healthy and route traffic to it, every request would 500.
+    Now returns 503 if the model isn't in memory.
+    """
+    if "model" not in ml_artifacts:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Model not loaded — check server startup logs")
+    return {"status": "ok", "model_loaded": True}
 
 
 """
@@ -160,15 +189,31 @@ def predict(customer: CustomerData):
     plain dict - customer_dict - which is exactly the input shape
     predict_single() (from predict.py) already expects and is
     already tested against. No new prediction logic lives here.
-    """
-    customer_dict = customer.model_dump()
 
-    result = predict_single(
-        customer_dict,
-        ml_artifacts["model"],
-        ml_artifacts["encoder"],
-        ml_artifacts["scaler"],
-        ml_artifacts["feature_columns"],
-        ml_artifacts["config"],
-    )
+    C3 FIX: wrapped in try/except so any internal failure (model
+    error, unexpected NumPy type, etc.) returns a clean JSON error
+    response instead of a raw Python traceback. Two cases:
+    - ValueError means our own preprocess_customer_data() caught a
+      missing field — return 422 with the exact field name.
+    - Anything else is unexpected; log the full traceback server-side
+      (so we can diagnose it) and return a clean 500 to the caller.
+    """
+    from fastapi import HTTPException
+
+    customer_dict = customer.model_dump()
+    try:
+        result = predict_single(
+            customer_dict,
+            ml_artifacts["model"],
+            ml_artifacts["encoder"],
+            ml_artifacts["scaler"],
+            ml_artifacts["feature_columns"],
+            ml_artifacts["config"],
+        )
+    except ValueError as e:
+        logger.warning("Prediction rejected — validation error: %s", e)
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.exception("Unexpected error during prediction")
+        raise HTTPException(status_code=500, detail="Internal prediction error")
     return result
