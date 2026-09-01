@@ -977,3 +977,153 @@ predict.py explainability feature).
   marked complete - none of these were caught during the phase itself.
   Worth doing this kind of pass occasionally rather than only trusting
   in-the-moment verification.
+- **Error handling is for the caller, not for you:** a raw Python
+  traceback from a missing file or bad input gives the caller no
+  actionable information — the exception class and call stack are
+  internal context, not a user-facing message. A one-line
+  `"Error: CSV file not found: 'x.csv'"` is strictly more useful than
+  a 15-line traceback ending in `FileNotFoundError: [Errno 2]`.
+- **A health endpoint that always returns 200 is worse than no health
+  endpoint:** if `/health` doesn't actually check model readiness, a
+  load balancer will route traffic to a broken container and every
+  request will 500 — with no indication the problem was startup, not
+  the request itself.
+- **`sys.exit(1)` vs `return` in a CLI entry point:** `return` from
+  `main()` exits with code 0 (success), even on a usage error. Tools
+  that call the script (make, CI jobs, shell pipelines) check exit
+  codes to decide whether to continue — a 0 on failure silently
+  breaks those chains. `sys.exit(1)` is the correct signal for
+  "something went wrong."
+
+## Phase 10 — Hardening & Error Handling — COMPLETE
+
+Full-repo audit conducted against 4 areas: system execution integrity,
+production readiness, architectural completeness, and feature gaps.
+14 issues identified (2 critical, 7 moderate, 5 minor). Scope was
+deliberately filtered for a portfolio project context: issues with
+functional impact to an interviewer or reviewer were fixed; cosmetic/
+consistency nits and infra-heavy improvements (DVC remote, API auth,
+rate limiting, docker-compose, Prometheus, etc.) were documented as
+known limitations / future work rather than implemented.
+
+**4 functional issues fixed:**
+
+### C3 — Exception handling on `api/app.py` `/predict` endpoint
+**Problem:** `predict_single()` had no `try/except` wrapper. Any
+internal failure (model error, unexpected type, etc.) propagated as an
+unhandled 500 with a raw Python traceback in the response body —
+no useful message for the caller, no log entry server-side.
+
+**Fix:** Wrapped `predict_single()` call in `try/except`:
+- `ValueError` (from `preprocess_customer_data`'s missing-field guard)
+  → HTTP 422 with the exact field name(s) as the detail string.
+  Surfaced via `logger.warning()` server-side.
+- Any other `Exception` → HTTP 500 with `"Internal prediction error"`,
+  full traceback logged server-side via `logger.exception()` (so it's
+  diagnosable without exposing internals to the caller).
+
+Added `import logging` + `logger = logging.getLogger(__name__)` at
+the top of `app.py` — needed by both C3 and C4.
+
+### C4 — Graceful startup failure in the lifespan hook
+**Problem:** If any artifact file was missing at container startup
+(e.g. `artifacts/champion_model/` not present), the lifespan raised
+a raw library exception (MLflow's `MlflowException`, buried under
+several stack frames) — no clear indication of which file was missing
+or what to do about it.
+
+**Fix:** Wrapped the `load_config()` + `load_artifacts()` calls in
+`try/except`:
+- `FileNotFoundError` → `RuntimeError: "Startup failed — required
+  artifact not found: ... Run train.py then export_champion_model.py
+  before starting the server."`
+- Any other `Exception` (including `MlflowException` for missing
+  exported model folders) → `RuntimeError: "Startup failed — could
+  not load ML artifacts: ..."` with the original exception message
+  appended.
+
+Added `logger.info("ML artifacts loaded successfully. API is ready.")`
+on successful startup as a positive confirmation in the logs.
+
+**Verified:** renamed `artifacts/champion_model/` temporarily, started
+uvicorn — last log line was `RuntimeError: Startup failed — could not
+load ML artifacts: No such artifact: 'champion_model'`. Server exited
+with code 1. Folder restored, normal startup confirmed.
+
+### M6 — `/health` reports "ok" even if model never loaded
+**Problem:** `health_check()` returned `{"status": "ok"}` unconditionally,
+even if the lifespan had failed silently and `ml_artifacts` was empty.
+A Docker healthcheck or load balancer would mark the container healthy
+and route real traffic to it, causing every request to fail with a
+`KeyError` on `ml_artifacts["model"]`.
+
+**Fix:** Added a guard at the top of `health_check()`:
+```python
+if "model" not in ml_artifacts:
+    raise HTTPException(status_code=503, detail="Model not loaded — check server startup logs")
+return {"status": "ok", "model_loaded": True}
+```
+503 is the correct HTTP status for "server exists but can't handle
+requests right now." Added `model_loaded: True` to the success
+response so downstream tools can assert on it, not just the status
+code.
+
+**Verified:** normal startup → `{"status": "ok", "model_loaded": true}`.
+
+### M7 — `predict.py main()` crashes with raw traceback on bad input
+**Problem:** `main()` called `pd.read_csv(csv_path)` inside
+`predict_from_csv()` with zero guards. A missing file → raw
+`FileNotFoundError` traceback. Wrong number of arguments → `print()`
+and a silent `return` (exit code 0 — wrong: callers treat 0 as
+success). Malformed CSV → `pandas.errors.ParserError` traceback.
+
+**Fix:** Three explicit guards before any data or artifact loading:
+1. Wrong arg count → `print(..., file=sys.stderr)` + `sys.exit(1)`.
+   Changed `return` to `sys.exit(1)` — exit code 0 on a usage error
+   is misleading to any caller that checks exit codes.
+2. File not found → `if not os.path.isfile(csv_path)` check before
+   loading the model: `"Error: CSV file not found: 'path'"` + exit 1.
+   Fails fast without loading any artifacts first.
+3. Runtime errors (missing columns, malformed CSV, model failures) →
+   `try/except` around the full load+predict block:
+   - `ValueError` (missing fields) → `"Error: {e}"` + exit 1.
+   - Any other exception → `"Error: prediction failed — {e}"` + exit 1.
+
+Also added `import os` to `predict.py`'s top-level imports — it was
+previously missing (only used inside a local `import os` in
+`data_preprocessing.py`'s `save_processed_data()`).
+
+**Verified:**
+- No args → `Usage: python src/predict.py path/to/customers.csv` +
+  exit 1.
+- `totally_missing_file.csv` → `Error: CSV file not found:
+  'totally_missing_file.csv'` + exit 1.
+
+**Regression check:** all 9 existing pytest tests still pass after
+all four changes (confirmed via `pytest tests/ -v`).
+
+### Known limitations / future work (documented, not implemented)
+The following were identified in the audit but deliberately not
+implemented — they are legitimate for a production system but
+out of scope for a portfolio project:
+
+- **DVC remote not configured** — `.dvc/config` is empty; `dvc pull`
+  only works locally. The build-time `COPY artifacts/` tradeoff is
+  already documented in the Dockerfile. A real DVC remote (S3/GCS)
+  would be the fix, but infra/cost isn't worth it here.
+- **CI smoke tests for training/evaluation/API** — current CI only
+  runs preprocessing unit tests. End-to-end pipeline tests would
+  require data or mocked artifacts in CI — real effort, not worth it
+  right now.
+- **Structured logging (print → logging)** — all scripts use `print()`
+  for output. Production systems use structured JSON logs. Cosmetic
+  for a portfolio project run locally.
+- **Minimal requirements.txt** — the current file is a full `pip freeze`
+  of the dev environment (272 packages including Celery, Flask,
+  Databricks SDK, etc. not used here). Splitting into prod/dev files
+  would significantly reduce Docker image size. Noted, not urgent.
+- **API authentication / rate limiting / HTTPS** — appropriate for a
+  public production service, not needed for a local portfolio demo.
+- **MLflow Model Registry**, **hyperparameter tuning with Optuna**,
+  **Prometheus metrics**, **docker-compose**, **pre-commit hooks**,
+  **Makefile** — all good ideas for a next project.
