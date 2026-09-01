@@ -116,15 +116,12 @@ pip install -r requirements.txt
 
 ### 2. Get the data
 
-The raw and processed data are DVC-tracked. If you have access to the DVC remote:
-```bash
-dvc pull
-```
+The raw and processed data are DVC-tracked (pointer files are committed), but no DVC remote is configured for this project — `dvc pull` will not work. Download [`Telco-Customer-Churn.csv`](https://www.kaggle.com/datasets/blastchar/telco-customer-churn), place it in `data/raw/`, then run:
 
-Otherwise, download [`Telco-Customer-Churn.csv`](https://www.kaggle.com/datasets/blastchar/telco-customer-churn) and place it in `data/raw/`, then run:
 ```bash
 python src/data_preprocessing.py
 ```
+
 
 ### 3. Train models and run experiments
 
